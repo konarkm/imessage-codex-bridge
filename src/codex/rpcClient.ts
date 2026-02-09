@@ -53,7 +53,7 @@ export class CodexRpcClient extends EventEmitter {
       return;
     }
 
-    this.child = spawn(this.opts.codexBin, ['app-server', '--listen', 'stdio://'], {
+    this.child = spawn(this.opts.codexBin, ['app-server'], {
       cwd: this.opts.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
