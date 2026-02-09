@@ -82,3 +82,4 @@ npm run build
 - v1 is text-only inbound/outbound.
 - v1 is single-trusted-user only.
 - Assistant/tool internals are not pushed by default; use `/debug` for timeline.
+- `codex-cli 0.98.0` does not expose `turn/steer`; the bridge auto-falls back to `turn/start`.

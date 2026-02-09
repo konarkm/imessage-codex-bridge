@@ -79,6 +79,7 @@ export class CodexSessionManager extends EventEmitter {
   private readonly defaultModel: string;
   private readonly modelPrefix: string;
   private readonly cwd: string;
+  private supportsTurnSteer = true;
 
   constructor(opts: SessionManagerOptions) {
     super();
@@ -141,9 +142,9 @@ export class CodexSessionManager extends EventEmitter {
 
   async startOrSteerTurn(text: string, flags: BridgeFlags): Promise<TurnStartResult> {
     const session = this.store.getSession(this.trustedPhoneNumber);
-    const threadId = session.threadId ?? (await this.ensureThread(flags));
+    let threadId = session.threadId ?? (await this.ensureThread(flags));
 
-    if (session.activeTurnId) {
+    if (session.activeTurnId && this.supportsTurnSteer) {
       try {
         const steerRaw = await this.rpc.request<unknown>('turn/steer', {
           threadId,
@@ -171,25 +172,66 @@ export class CodexSessionManager extends EventEmitter {
           threadId,
         };
       } catch (error) {
-        this.store.clearActiveTurn(this.trustedPhoneNumber);
-        this.store.appendAudit({
-          phoneNumber: this.trustedPhoneNumber,
-          threadId,
-          kind: 'error',
-          summary: 'turn steer failed; falling back to turn/start',
-          payload: String(error),
-        });
+        if (isUnsupportedTurnSteer(error)) {
+          this.supportsTurnSteer = false;
+          this.store.appendAudit({
+            phoneNumber: this.trustedPhoneNumber,
+            threadId,
+            kind: 'system',
+            summary: 'turn/steer unsupported by codex version; using turn/start fallback',
+            payload: String(error),
+          });
+        }
+
+        if (isThreadNotFound(error)) {
+          this.store.resetRuntime(this.trustedPhoneNumber);
+          threadId = await this.ensureThread(flags);
+        } else if (!isUnsupportedTurnSteer(error)) {
+          this.store.clearActiveTurn(this.trustedPhoneNumber);
+          this.store.appendAudit({
+            phoneNumber: this.trustedPhoneNumber,
+            threadId,
+            kind: 'error',
+            summary: 'turn steer failed; falling back to turn/start',
+            payload: String(error),
+          });
+        }
       }
     }
 
-    const startRaw = await this.rpc.request<unknown>('turn/start', {
-      threadId,
-      input: [asTextInput(text)],
-      model: session.model,
-      approvalPolicy: flags.autoApprove ? 'never' : 'on-request',
-      sandboxPolicy: { type: 'dangerFullAccess' },
-      cwd: this.cwd,
-    });
+    let startRaw: unknown;
+    try {
+      startRaw = await this.rpc.request<unknown>('turn/start', {
+        threadId,
+        input: [asTextInput(text)],
+        model: session.model,
+        approvalPolicy: flags.autoApprove ? 'never' : 'on-request',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+        cwd: this.cwd,
+      });
+    } catch (error) {
+      if (!isThreadNotFound(error)) {
+        throw error;
+      }
+
+      this.store.appendAudit({
+        phoneNumber: this.trustedPhoneNumber,
+        threadId,
+        kind: 'error',
+        summary: 'thread not found on turn/start; recreating thread',
+        payload: String(error),
+      });
+      this.store.resetRuntime(this.trustedPhoneNumber);
+      threadId = await this.ensureThread(flags);
+      startRaw = await this.rpc.request<unknown>('turn/start', {
+        threadId,
+        input: [asTextInput(text)],
+        model: session.model,
+        approvalPolicy: flags.autoApprove ? 'never' : 'on-request',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+        cwd: this.cwd,
+      });
+    }
 
     const startParsed = turnStartResponseSchema.safeParse(startRaw);
     if (!startParsed.success) {
@@ -418,4 +460,27 @@ function asTextInput(text: string): { type: 'text'; text: string; text_elements:
     text,
     text_elements: [],
   };
+}
+
+function isThreadNotFound(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== 'string') {
+    return false;
+  }
+  return message.toLowerCase().includes('thread not found');
+}
+
+function isUnsupportedTurnSteer(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== 'string') {
+    return false;
+  }
+  const lower = message.toLowerCase();
+  return lower.includes('unknown variant `turn/steer`') || lower.includes('unknown method') && lower.includes('turn/steer');
 }
