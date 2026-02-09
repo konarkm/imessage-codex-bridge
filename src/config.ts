@@ -26,7 +26,7 @@ const envSchema = z.object({
   SENDBLUE_API_SECRET: z.string().min(1),
   SENDBLUE_PHONE_NUMBER: z.string().min(1),
   TRUSTED_PHONE_NUMBER: z.string().min(1),
-  SENDBLUE_API_BASE: z.string().url().default('https://api.sendblue.com/api'),
+  SENDBLUE_API_BASE: z.string().url().default('https://api.sendblue.co/api'),
   POLL_INTERVAL_MS: z.coerce.number().int().min(1000).max(30000).default(3000),
   CODEX_BIN: z.string().min(1).default('codex'),
   CODEX_CWD: z.string().min(1).default(process.cwd()),
