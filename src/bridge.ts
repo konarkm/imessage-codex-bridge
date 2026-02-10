@@ -15,14 +15,10 @@ interface BridgeDeps {
   modelPrefix: string;
 }
 
-interface RelayState {
-  latestText: string;
-  completed: boolean;
-  sent: boolean;
-}
-
 class AssistantRelay {
-  private readonly states = new Map<string, RelayState>();
+  private readonly sentItemIds = new Set<string>();
+  private readonly sentItemOrder: string[] = [];
+  private readonly maxTrackedItems = 4000;
 
   constructor(private readonly sendText: (text: string) => Promise<void>) {}
 
@@ -31,57 +27,36 @@ class AssistantRelay {
     // and can trip anti-spam safeguards. We only send final assistant text.
   }
 
-  onFinal(_itemId: string, turnId: string, text: string): void {
-    const state = this.getOrCreate(turnId);
-    if (text.length >= state.latestText.length) {
-      state.latestText = text;
-    }
-    if (state.completed && !state.sent) {
-      void this.flushForTurn(turnId);
-    }
-  }
-
-  onTurnCompleted(turnId: string): void {
-    const state = this.getOrCreate(turnId);
-    state.completed = true;
-    if (!state.sent) {
-      void this.flushForTurn(turnId);
-    }
-  }
-
-  private getOrCreate(turnId: string): RelayState {
-    const existing = this.states.get(turnId);
-    if (existing) {
-      return existing;
-    }
-
-    const state: RelayState = {
-      latestText: '',
-      completed: false,
-      sent: false,
-    };
-    this.states.set(turnId, state);
-    return state;
-  }
-
-  async flushForTurn(turnId: string): Promise<void> {
-    const state = this.states.get(turnId);
-    if (!state) {
+  onFinal(itemId: string, _turnId: string, text: string): void {
+    if (this.sentItemIds.has(itemId)) {
       return;
     }
 
-    if (state.sent || !state.completed) {
+    const textToSend = text.trim();
+    if (textToSend.length === 0) {
       return;
     }
 
-    const text = state.latestText.trim();
-    if (text.length === 0) {
+    this.trackSentItem(itemId);
+    void this.sendText(textToSend);
+  }
+
+  onTurnCompleted(_turnId: string): void {
+    // no-op for now
+  }
+
+  private trackSentItem(itemId: string): void {
+    this.sentItemIds.add(itemId);
+    this.sentItemOrder.push(itemId);
+
+    if (this.sentItemOrder.length <= this.maxTrackedItems) {
       return;
     }
 
-    state.sent = true;
-    await this.sendText(text);
-    this.states.delete(turnId);
+    const evicted = this.sentItemOrder.shift();
+    if (evicted) {
+      this.sentItemIds.delete(evicted);
+    }
   }
 }
 
