@@ -168,13 +168,36 @@ export class CodexSessionManager extends EventEmitter {
     }
 
     const approvalPolicy = flags?.autoApprove === false ? 'on-request' : 'never';
-    const raw = await this.rpc.request<unknown>('thread/start', {
+    const threadStartParams = {
       model: session.model || this.defaultModel,
       cwd: this.cwd,
       approvalPolicy,
-      sandbox: 'danger-full-access',
+      sandbox: 'danger-full-access' as const,
       experimentalRawEvents: false,
-    });
+    };
+
+    let raw: unknown;
+    try {
+      raw = await this.rpc.request<unknown>('thread/start', threadStartParams);
+    } catch (error) {
+      if (!isThreadStartTimeout(error)) {
+        throw error;
+      }
+
+      // The app-server can occasionally wedge and stop responding to thread/start.
+      // Restart once and retry before surfacing an error to the user.
+      this.store.appendAudit({
+        phoneNumber: this.trustedPhoneNumber,
+        kind: 'error',
+        summary: 'thread/start timed out; restarting codex app-server and retrying',
+        payload: String(error),
+      });
+
+      await this.rpc.stop();
+      await this.rpc.start();
+      this.attachedThreadId = null;
+      raw = await this.rpc.request<unknown>('thread/start', threadStartParams);
+    }
 
     const parsed = threadStartResponseSchema.safeParse(raw);
     if (!parsed.success) {
@@ -640,4 +663,15 @@ function isUnsupportedTurnSteer(error: unknown): boolean {
   }
   const lower = message.toLowerCase();
   return lower.includes('unknown variant `turn/steer`') || lower.includes('unknown method') && lower.includes('turn/steer');
+}
+
+function isThreadStartTimeout(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== 'string') {
+    return false;
+  }
+  return message.includes('RPC request timed out: thread/start');
 }

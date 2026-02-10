@@ -14,7 +14,7 @@ iMessage-first bridge for Codex via Sendblue.
 
 ## Architecture
 
-- Runtime: local Mac daemon
+- Runtime: local Mac terminal process
 - Transport to Codex: local stdio JSON-RPC (`codex app-server --listen stdio://`)
 - Transport to iMessage: Sendblue API polling + send message API
 - Safety mode default: danger-full-access (per v1 decision)
@@ -48,7 +48,7 @@ Current workaround (until `0.99+` is officially released): build from latest `ma
 ```bash
 git clone https://github.com/openai/codex.git
 cd codex/codex-rs
-cargo build --release
+CARGO_PROFILE_RELEASE_LTO=thin cargo build --release -p codex-cli --bin codex
 ```
 
 Binary path will be:
@@ -93,7 +93,7 @@ git fetch origin
 git checkout main
 git pull --ff-only
 cd codex-rs
-cargo build --release
+CARGO_PROFILE_RELEASE_LTO=thin cargo build --release -p codex-cli --bin codex
 ```
 
 5. Start manually for development:
@@ -102,27 +102,34 @@ cargo build --release
 ./scripts/run-dev.sh
 ```
 
-6. In iMessage, text from trusted number to the Sendblue number.
-
-## launchd (persistent)
-
-Install/refresh launch agent:
+6. Keep it running in a terminal:
 
 ```bash
-./scripts/install-launchd.sh
+while true; do ./scripts/run-dev.sh; echo "bridge exited, restarting in 2s"; sleep 2; done
 ```
 
-Useful commands:
+7. Optional detached mode via tmux:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.imessage.codex.bridge.plist
-launchctl load ~/Library/LaunchAgents/com.imessage.codex.bridge.plist
+tmux new -s imessage-bridge 'cd /absolute/path/to/imessage-codex-bridge && ./scripts/run-dev.sh'
 ```
 
-Logs:
+8. In iMessage, text from trusted number to the Sendblue number.
 
-- `/tmp/imessage-codex-bridge.out.log`
-- `/tmp/imessage-codex-bridge.err.log`
+## Run notes
+
+- Run exactly one bridge process at a time.
+- If you run it in tmux:
+
+```bash
+tmux attach -t imessage-bridge
+```
+
+- Stop tmux-run bridge:
+
+```bash
+tmux kill-session -t imessage-bridge
+```
 
 ## Development checks
 
