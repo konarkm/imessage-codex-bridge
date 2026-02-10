@@ -11,6 +11,12 @@ export interface AppConfig {
     apiBase: string;
     pollIntervalMs: number;
   };
+  bridge: {
+    enableTypingIndicators: boolean;
+    enableReadReceipts: boolean;
+    inboundMediaMode: 'url_only';
+    typingHeartbeatMs: number;
+  };
   trustedPhoneNumber: string;
   codex: {
     bin: string;
@@ -33,6 +39,16 @@ const envSchema = z.object({
   CODEX_MODEL_PREFIX: z.string().min(1).default('gpt-5.3-codex'),
   CODEX_MODEL: z.string().min(1).default('gpt-5.3-codex'),
   STATE_DB_PATH: z.string().min(1).default(resolve(homedir(), '.imessage-codex-bridge', 'state.db')),
+  ENABLE_TYPING_INDICATORS: z
+    .enum(['0', '1', 'true', 'false'])
+    .default('1')
+    .transform((value) => value === '1' || value === 'true'),
+  ENABLE_READ_RECEIPTS: z
+    .enum(['0', '1', 'true', 'false'])
+    .default('1')
+    .transform((value) => value === '1' || value === 'true'),
+  INBOUND_MEDIA_MODE: z.enum(['url_only']).default('url_only'),
+  TYPING_HEARTBEAT_MS: z.coerce.number().int().min(3000).max(30000).default(10000),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -60,6 +76,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       phoneNumber: sendbluePhoneNumber,
       apiBase: parsed.SENDBLUE_API_BASE,
       pollIntervalMs: parsed.POLL_INTERVAL_MS,
+    },
+    bridge: {
+      enableTypingIndicators: parsed.ENABLE_TYPING_INDICATORS,
+      enableReadReceipts: parsed.ENABLE_READ_RECEIPTS,
+      inboundMediaMode: parsed.INBOUND_MEDIA_MODE,
+      typingHeartbeatMs: parsed.TYPING_HEARTBEAT_MS,
     },
     trustedPhoneNumber,
     codex: {

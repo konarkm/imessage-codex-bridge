@@ -6,7 +6,8 @@ Standalone iMessage-first bridge for Codex app-server using Sendblue.
 
 - Polls Sendblue for inbound iMessages from one trusted number.
 - Routes user text to Codex app-server (`turn/start` / `turn/steer`).
-- Streams assistant message deltas back to iMessage.
+- Forwards inbound media as attachment URLs into Codex context.
+- Sends typing indicators and read receipts through Sendblue (configurable).
 - Supports interrupt/reset/debug/control commands.
 - Keeps structured local audit logs in SQLite.
 
@@ -79,7 +80,7 @@ npm run build
 
 ## Notes
 
-- v1 is text-only inbound/outbound.
+- v1 is text outbound; inbound media is forwarded to Codex as URL context.
 - v1 is single-trusted-user only.
 - Assistant/tool internals are not pushed by default; use `/debug` for timeline.
 - Requires a Codex app-server build that supports `turn/steer` (latest `origin/main` or `0.99+` once released).

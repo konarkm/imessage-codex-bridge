@@ -11,7 +11,7 @@ interface SendblueConfig {
 
 const messageSchema = z.object({
   message_handle: z.string(),
-  content: z.string().default(''),
+  content: z.string().nullish().transform((value) => value ?? ''),
   from_number: z.string(),
   to_number: z.string().default(''),
   number: z.string().optional(),
@@ -20,7 +20,7 @@ const messageSchema = z.object({
   date_updated: z.string().optional(),
   created_at: z.string().optional(),
   is_outbound: z.boolean(),
-  media_url: z.string().optional(),
+  media_url: z.string().nullish().transform((value) => value ?? undefined),
 });
 
 const listSchema = z.object({
@@ -98,6 +98,46 @@ export class SendblueClient {
     }
 
     return parsed.data.message_handle ?? parsed.data.id ?? '';
+  }
+
+  async sendTypingIndicator(toNumber: string): Promise<void> {
+    const target = normalizePhone(toNumber);
+    const response = await fetch(`${this.apiBase}/send-typing-indicator`, {
+      method: 'POST',
+      headers: {
+        ...this.authHeaders(),
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        number: target,
+        from_number: this.fromPhoneNumber,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Sendblue typing indicator failed: ${response.status} ${body}`);
+    }
+  }
+
+  async markRead(number: string): Promise<void> {
+    const target = normalizePhone(number);
+    const response = await fetch(`${this.apiBase}/mark-read`, {
+      method: 'POST',
+      headers: {
+        ...this.authHeaders(),
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        number: target,
+        from_number: this.fromPhoneNumber,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Sendblue mark-read failed: ${response.status} ${body}`);
+    }
   }
 
   private authHeaders(): HeadersInit {

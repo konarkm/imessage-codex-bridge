@@ -42,6 +42,10 @@ async function main(): Promise<void> {
     trustedPhoneNumber: config.trustedPhoneNumber,
     pollIntervalMs: config.sendblue.pollIntervalMs,
     modelPrefix: config.codex.modelPrefix,
+    enableTypingIndicators: config.bridge.enableTypingIndicators,
+    enableReadReceipts: config.bridge.enableReadReceipts,
+    inboundMediaMode: config.bridge.inboundMediaMode,
+    typingHeartbeatMs: config.bridge.typingHeartbeatMs,
   });
 
   let shuttingDown = false;
@@ -75,6 +79,8 @@ async function main(): Promise<void> {
   logInfo(`Poll interval: ${config.sendblue.pollIntervalMs}ms`);
   logInfo(`Model prefix policy: ${config.codex.modelPrefix}`);
   logInfo(`Codex cwd: ${config.codex.cwd}`);
+  logInfo(`Typing indicators: ${config.bridge.enableTypingIndicators}`);
+  logInfo(`Read receipts: ${config.bridge.enableReadReceipts}`);
 
   await bridge.start();
 }

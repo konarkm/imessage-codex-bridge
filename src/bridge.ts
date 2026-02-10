@@ -13,6 +13,10 @@ interface BridgeDeps {
   trustedPhoneNumber: string;
   pollIntervalMs: number;
   modelPrefix: string;
+  enableTypingIndicators: boolean;
+  enableReadReceipts: boolean;
+  inboundMediaMode: 'url_only';
+  typingHeartbeatMs: number;
 }
 
 class AssistantRelay {
@@ -65,6 +69,12 @@ export class BridgeService {
   private inPoll = false;
   private outboundQueue: Promise<void> = Promise.resolve();
   private readonly relay: AssistantRelay;
+  private typingTurnId: string | null = null;
+  private typingItemId: string | null = null;
+  private lastTypingSentAtMs = 0;
+  private typingSendInFlight = false;
+  private typingBackoffUntilMs = 0;
+  private readonly typingFailureBackoffMs = 30_000;
 
   constructor(private readonly deps: BridgeDeps) {
     this.relay = new AssistantRelay(async (text) => {
@@ -100,6 +110,7 @@ export class BridgeService {
   private registerSessionEvents(): void {
     this.deps.sessions.on('assistantDelta', (event: { itemId: string; turnId: string; delta: string }) => {
       this.relay.onDelta(event.itemId, event.turnId, event.delta);
+      void this.maybeSendTypingIndicator(event.turnId, event.itemId);
     });
 
     this.deps.sessions.on('assistantFinal', (event: { itemId: string; turnId: string; text: string }) => {
@@ -110,6 +121,7 @@ export class BridgeService {
       'turnCompleted',
       (event: { turnId: string; status: string; error?: { error?: { message?: string }; message?: string } }) => {
         this.relay.onTurnCompleted(event.turnId);
+        this.clearTypingStateForTurn(event.turnId);
 
         if (event.status === 'failed') {
           const message = getErrorMessage(event.error);
@@ -169,17 +181,18 @@ export class BridgeService {
     }
 
     const text = message.content.trim();
+    const mediaUrl = message.media_url?.trim() ?? '';
     this.deps.store.appendAudit({
       phoneNumber: fromNumber,
       kind: 'inbound_message',
-      summary: text.slice(0, 200),
+      summary: text.length > 0 ? text.slice(0, 200) : mediaUrl ? `[media] ${mediaUrl}` : '(empty)',
       payload: {
         messageHandle: message.message_handle,
+        mediaUrl: mediaUrl || null,
       },
     });
 
-    if (text.length === 0) {
-      await this.enqueueOutbound('Text-only v1: media-only inbound messages are not supported yet.');
+    if (text.length === 0 && mediaUrl.length === 0) {
       return;
     }
 
@@ -187,6 +200,7 @@ export class BridgeService {
       const command = parseSlashCommand(text);
       if (!command) {
         await this.enqueueOutbound('Unknown command. Use /help');
+        await this.maybeSendReadReceipt(fromNumber, 'slash command rejected: unknown');
         return;
       }
 
@@ -195,6 +209,7 @@ export class BridgeService {
         if (response) {
           await this.enqueueOutbound(response);
         }
+        await this.maybeSendReadReceipt(fromNumber, `slash command accepted: /${command.name}`);
       } catch (error) {
         this.deps.store.appendAudit({
           phoneNumber: fromNumber,
@@ -203,18 +218,27 @@ export class BridgeService {
           payload: String(error),
         });
         await this.enqueueOutbound(`/${command.name} failed: ${getErrorMessage(error)}`);
+        await this.maybeSendReadReceipt(fromNumber, `slash command failed: /${command.name}`);
       }
       return;
     }
 
-    await this.handleUserText(text);
+    const inputText = composeInboundTextForCodex(text, mediaUrl, this.deps.inboundMediaMode);
+    if (inputText.length === 0) {
+      return;
+    }
+
+    const accepted = await this.handleUserText(inputText);
+    if (accepted) {
+      await this.maybeSendReadReceipt(fromNumber, 'inbound text/media accepted');
+    }
   }
 
-  private async handleUserText(text: string): Promise<void> {
+  private async handleUserText(text: string): Promise<boolean> {
     const flags = this.deps.store.getFlags();
     if (flags.paused) {
       await this.enqueueOutbound('Bridge is paused. Use /resume to continue.');
-      return;
+      return false;
     }
 
     try {
@@ -226,6 +250,7 @@ export class BridgeService {
         kind: result.mode === 'steer' ? 'turn_steered' : 'turn_started',
         summary: `${result.mode} accepted`,
       });
+      return true;
     } catch (error) {
       this.deps.store.appendAudit({
         phoneNumber: this.deps.trustedPhoneNumber,
@@ -234,7 +259,89 @@ export class BridgeService {
         payload: String(error),
       });
       await this.enqueueOutbound(`Failed to submit message: ${String(error)}`);
+      return false;
     }
+  }
+
+  private async maybeSendReadReceipt(fromNumber: string, summary: string): Promise<void> {
+    if (!this.deps.enableReadReceipts) {
+      return;
+    }
+
+    try {
+      await this.deps.sendblue.markRead(fromNumber);
+      this.deps.store.appendAudit({
+        phoneNumber: fromNumber,
+        kind: 'system',
+        summary: `read receipt sent: ${summary}`,
+      });
+    } catch (error) {
+      this.deps.store.appendAudit({
+        phoneNumber: fromNumber,
+        kind: 'error',
+        summary: `read receipt failed: ${summary}`,
+        payload: String(error),
+      });
+      logWarn('Failed to send read receipt', error);
+    }
+  }
+
+  private async maybeSendTypingIndicator(turnId: string, itemId: string): Promise<void> {
+    if (!this.deps.enableTypingIndicators) {
+      return;
+    }
+
+    if (this.typingTurnId !== turnId || this.typingItemId !== itemId) {
+      this.typingTurnId = turnId;
+      this.typingItemId = itemId;
+      this.lastTypingSentAtMs = 0;
+    }
+
+    const now = Date.now();
+    if (now < this.typingBackoffUntilMs) {
+      return;
+    }
+    if (this.typingSendInFlight) {
+      return;
+    }
+    if (this.lastTypingSentAtMs > 0 && now - this.lastTypingSentAtMs < this.deps.typingHeartbeatMs) {
+      return;
+    }
+
+    this.typingSendInFlight = true;
+    try {
+      await this.deps.sendblue.sendTypingIndicator(this.deps.trustedPhoneNumber);
+      this.lastTypingSentAtMs = Date.now();
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        threadId: this.currentSession().threadId,
+        turnId,
+        kind: 'system',
+        summary: 'typing indicator sent',
+      });
+    } catch (error) {
+      this.typingBackoffUntilMs = Date.now() + this.typingFailureBackoffMs;
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        threadId: this.currentSession().threadId,
+        turnId,
+        kind: 'error',
+        summary: 'typing indicator failed',
+        payload: String(error),
+      });
+      logWarn('Failed to send typing indicator', error);
+    } finally {
+      this.typingSendInFlight = false;
+    }
+  }
+
+  private clearTypingStateForTurn(turnId: string): void {
+    if (this.typingTurnId !== turnId) {
+      return;
+    }
+    this.typingTurnId = null;
+    this.typingItemId = null;
+    this.lastTypingSentAtMs = 0;
   }
 
   private async executeCommand(name: string, args: string[]): Promise<string> {
@@ -378,6 +485,31 @@ export function splitMessage(text: string, maxChars: number): string[] {
   }
 
   return parts;
+}
+
+export function composeInboundTextForCodex(
+  text: string,
+  mediaUrl: string | undefined,
+  mode: 'url_only' = 'url_only',
+): string {
+  const trimmedText = text.trim();
+  const trimmedMediaUrl = mediaUrl?.trim() ?? '';
+
+  if (trimmedMediaUrl.length === 0) {
+    return trimmedText;
+  }
+
+  if (mode === 'url_only') {
+    const lines: string[] = [];
+    if (trimmedText.length > 0) {
+      lines.push(`User message: ${trimmedText}`);
+    }
+    lines.push(`User attached media URL: ${trimmedMediaUrl}`);
+    lines.push('Fetch and inspect this attachment URL as needed.');
+    return lines.join('\n');
+  }
+
+  return trimmedText;
 }
 
 function sortMessagesAscending(messages: SendblueMessage[]): SendblueMessage[] {
