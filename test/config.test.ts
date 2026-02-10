@@ -17,6 +17,7 @@ describe('loadConfig', () => {
       STATE_DB_PATH: '/tmp/test-state.db',
       ENABLE_TYPING_INDICATORS: '1',
       ENABLE_READ_RECEIPTS: '1',
+      ENABLE_OUTBOUND_UNICODE_FORMATTING: '1',
       INBOUND_MEDIA_MODE: 'url_only',
       TYPING_HEARTBEAT_MS: '10000',
     });
@@ -26,6 +27,7 @@ describe('loadConfig', () => {
     expect(config.codex.defaultModel).toBe('gpt-5.3-codex');
     expect(config.bridge.enableTypingIndicators).toBe(true);
     expect(config.bridge.enableReadReceipts).toBe(true);
+    expect(config.bridge.enableOutboundUnicodeFormatting).toBe(true);
     expect(config.bridge.inboundMediaMode).toBe('url_only');
     expect(config.bridge.typingHeartbeatMs).toBe(10000);
   });
@@ -53,12 +55,14 @@ describe('loadConfig', () => {
       CODEX_MODEL: 'gpt-5.3-codex',
       ENABLE_TYPING_INDICATORS: 'false',
       ENABLE_READ_RECEIPTS: '0',
+      ENABLE_OUTBOUND_UNICODE_FORMATTING: 'false',
       INBOUND_MEDIA_MODE: 'url_only',
       TYPING_HEARTBEAT_MS: '9000',
     });
 
     expect(config.bridge.enableTypingIndicators).toBe(false);
     expect(config.bridge.enableReadReceipts).toBe(false);
+    expect(config.bridge.enableOutboundUnicodeFormatting).toBe(false);
     expect(config.bridge.typingHeartbeatMs).toBe(9000);
   });
 });

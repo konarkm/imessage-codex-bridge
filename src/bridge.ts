@@ -15,6 +15,7 @@ interface BridgeDeps {
   modelPrefix: string;
   enableTypingIndicators: boolean;
   enableReadReceipts: boolean;
+  enableOutboundUnicodeFormatting: boolean;
   inboundMediaMode: 'url_only';
   typingHeartbeatMs: number;
 }
@@ -435,7 +436,8 @@ export class BridgeService {
 
   private async enqueueOutbound(text: string): Promise<void> {
     this.outboundQueue = this.outboundQueue.then(async () => {
-      const chunks = splitMessage(text, 1200);
+      const formatted = formatOutboundForImessage(text, this.deps.enableOutboundUnicodeFormatting);
+      const chunks = splitMessage(formatted, 1200);
       for (const chunk of chunks) {
         if (chunk.trim().length === 0) {
           continue;
@@ -485,6 +487,64 @@ export function splitMessage(text: string, maxChars: number): string[] {
   }
 
   return parts;
+}
+
+export function formatOutboundForImessage(text: string, enabled = true): string {
+  if (!enabled) {
+    return text;
+  }
+
+  let formatted = text;
+  formatted = formatted.replace(/`([^`\n]+)`/g, (_match, inner: string) => styleAsciiAsUnicode(inner, 'mono'));
+  formatted = formatted.replace(/\*\*([^*\n][^*]*?)\*\*/g, (_match, inner: string) => styleAsciiAsUnicode(inner, 'bold'));
+  formatted = formatted.replace(/__([^_\n][^_]*?)__/g, (_match, inner: string) => styleAsciiAsUnicode(inner, 'bold'));
+  formatted = formatted.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, (_match, prefix: string, inner: string) => {
+    return `${prefix}${styleAsciiAsUnicode(inner, 'italic')}`;
+  });
+  formatted = formatted.replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, (_match, prefix: string, inner: string) => {
+    return `${prefix}${styleAsciiAsUnicode(inner, 'italic')}`;
+  });
+  return formatted;
+}
+
+type UnicodeStyle = 'bold' | 'italic' | 'mono';
+
+function styleAsciiAsUnicode(text: string, style: UnicodeStyle): string {
+  let output = '';
+  for (const char of text) {
+    output += styleChar(char, style);
+  }
+  return output;
+}
+
+function styleChar(char: string, style: UnicodeStyle): string {
+  const code = char.codePointAt(0);
+  if (code === undefined) {
+    return char;
+  }
+
+  if (code >= 0x41 && code <= 0x5a) {
+    const upperBase = style === 'bold' ? 0x1d400 : style === 'italic' ? 0x1d434 : 0x1d670;
+    return String.fromCodePoint(upperBase + (code - 0x41));
+  }
+
+  if (code >= 0x61 && code <= 0x7a) {
+    if (style === 'italic' && code === 0x68) {
+      return String.fromCodePoint(0x210e);
+    }
+    const lowerBase = style === 'bold' ? 0x1d41a : style === 'italic' ? 0x1d44e : 0x1d68a;
+    return String.fromCodePoint(lowerBase + (code - 0x61));
+  }
+
+  if (code >= 0x30 && code <= 0x39) {
+    if (style === 'italic') {
+      return char;
+    }
+    const digitBase = style === 'bold' ? 0x1d7ce : 0x1d7f6;
+    return String.fromCodePoint(digitBase + (code - 0x30));
+  }
+
+  return char;
 }
 
 export function composeInboundTextForCodex(

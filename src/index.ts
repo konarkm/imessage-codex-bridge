@@ -44,6 +44,7 @@ async function main(): Promise<void> {
     modelPrefix: config.codex.modelPrefix,
     enableTypingIndicators: config.bridge.enableTypingIndicators,
     enableReadReceipts: config.bridge.enableReadReceipts,
+    enableOutboundUnicodeFormatting: config.bridge.enableOutboundUnicodeFormatting,
     inboundMediaMode: config.bridge.inboundMediaMode,
     typingHeartbeatMs: config.bridge.typingHeartbeatMs,
   });
@@ -81,6 +82,7 @@ async function main(): Promise<void> {
   logInfo(`Codex cwd: ${config.codex.cwd}`);
   logInfo(`Typing indicators: ${config.bridge.enableTypingIndicators}`);
   logInfo(`Read receipts: ${config.bridge.enableReadReceipts}`);
+  logInfo(`Outbound unicode formatting: ${config.bridge.enableOutboundUnicodeFormatting}`);
 
   await bridge.start();
 }

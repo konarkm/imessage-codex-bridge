@@ -14,6 +14,7 @@ export interface AppConfig {
   bridge: {
     enableTypingIndicators: boolean;
     enableReadReceipts: boolean;
+    enableOutboundUnicodeFormatting: boolean;
     inboundMediaMode: 'url_only';
     typingHeartbeatMs: number;
   };
@@ -44,6 +45,10 @@ const envSchema = z.object({
     .default('1')
     .transform((value) => value === '1' || value === 'true'),
   ENABLE_READ_RECEIPTS: z
+    .enum(['0', '1', 'true', 'false'])
+    .default('1')
+    .transform((value) => value === '1' || value === 'true'),
+  ENABLE_OUTBOUND_UNICODE_FORMATTING: z
     .enum(['0', '1', 'true', 'false'])
     .default('1')
     .transform((value) => value === '1' || value === 'true'),
@@ -80,6 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     bridge: {
       enableTypingIndicators: parsed.ENABLE_TYPING_INDICATORS,
       enableReadReceipts: parsed.ENABLE_READ_RECEIPTS,
+      enableOutboundUnicodeFormatting: parsed.ENABLE_OUTBOUND_UNICODE_FORMATTING,
       inboundMediaMode: parsed.INBOUND_MEDIA_MODE,
       typingHeartbeatMs: parsed.TYPING_HEARTBEAT_MS,
     },

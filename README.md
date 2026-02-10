@@ -8,6 +8,7 @@ Standalone iMessage-first bridge for Codex app-server using Sendblue.
 - Routes user text to Codex app-server (`turn/start` / `turn/steer`).
 - Forwards inbound media as attachment URLs into Codex context.
 - Sends typing indicators and best-effort read receipts through Sendblue (configurable).
+- Applies optional outbound Markdown-to-Unicode styling for iMessage readability.
 - Supports interrupt/reset/debug/control commands.
 - Keeps structured local audit logs in SQLite.
 
@@ -85,3 +86,4 @@ npm run build
 - Assistant/tool internals are not pushed by default; use `/debug` for timeline.
 - Requires a Codex app-server build that supports `turn/steer` (latest `origin/main` or `0.99+` once released).
 - Read receipts are best-effort: the Sendblue `mark-read` call can return success while iMessage UI still shows `Delivered`.
+- Outbound formatting defaults to `ENABLE_OUTBOUND_UNICODE_FORMATTING=1` and converts markdown markers like `**bold**`, `*italic*`, and `` `code` ``.
