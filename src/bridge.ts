@@ -16,109 +16,72 @@ interface BridgeDeps {
 }
 
 interface RelayState {
-  turnId: string;
-  fullText: string;
-  sentLen: number;
-  timer: NodeJS.Timeout | null;
+  latestText: string;
+  completed: boolean;
+  sent: boolean;
 }
 
 class AssistantRelay {
   private readonly states = new Map<string, RelayState>();
-  private readonly flushDelayMs = 1500;
-  private readonly minImmediateChars = 220;
 
   constructor(private readonly sendText: (text: string) => Promise<void>) {}
 
-  onDelta(itemId: string, turnId: string, delta: string): void {
-    const state = this.getOrCreate(itemId, turnId);
-    state.fullText += delta;
+  onDelta(_itemId: string, _turnId: string, _delta: string): void {
+    // Intentionally no-op: streaming deltas are noisy over SMS/iMessage
+    // and can trip anti-spam safeguards. We only send final assistant text.
+  }
 
-    if (this.shouldImmediateFlush(state)) {
-      void this.flush(itemId, false);
-      return;
+  onFinal(_itemId: string, turnId: string, text: string): void {
+    const state = this.getOrCreate(turnId);
+    if (text.length >= state.latestText.length) {
+      state.latestText = text;
     }
-
-    if (!state.timer) {
-      state.timer = setTimeout(() => {
-        void this.flush(itemId, false);
-      }, this.flushDelayMs);
+    if (state.completed && !state.sent) {
+      void this.flushForTurn(turnId);
     }
   }
 
-  onFinal(itemId: string, turnId: string, text: string): void {
-    const state = this.getOrCreate(itemId, turnId);
-    if (text.length >= state.fullText.length) {
-      state.fullText = text;
-    }
-    void this.flush(itemId, true);
-  }
-
-  async flushForTurn(turnId: string): Promise<void> {
-    const itemIds = [...this.states.entries()]
-      .filter(([, state]) => state.turnId === turnId)
-      .map(([itemId]) => itemId);
-
-    for (const itemId of itemIds) {
-      await this.flush(itemId, true);
+  onTurnCompleted(turnId: string): void {
+    const state = this.getOrCreate(turnId);
+    state.completed = true;
+    if (!state.sent) {
+      void this.flushForTurn(turnId);
     }
   }
 
-  private getOrCreate(itemId: string, turnId: string): RelayState {
-    const existing = this.states.get(itemId);
+  private getOrCreate(turnId: string): RelayState {
+    const existing = this.states.get(turnId);
     if (existing) {
       return existing;
     }
 
     const state: RelayState = {
-      turnId,
-      fullText: '',
-      sentLen: 0,
-      timer: null,
+      latestText: '',
+      completed: false,
+      sent: false,
     };
-    this.states.set(itemId, state);
+    this.states.set(turnId, state);
     return state;
   }
 
-  private shouldImmediateFlush(state: RelayState): boolean {
-    const unsent = state.fullText.slice(state.sentLen);
-    if (unsent.length >= this.minImmediateChars) {
-      return true;
-    }
-    if (unsent.includes('\n\n')) {
-      return true;
-    }
-    return /[.!?]\s$/.test(unsent);
-  }
-
-  private async flush(itemId: string, force: boolean): Promise<void> {
-    const state = this.states.get(itemId);
+  async flushForTurn(turnId: string): Promise<void> {
+    const state = this.states.get(turnId);
     if (!state) {
       return;
     }
 
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
-
-    const unsent = state.fullText.slice(state.sentLen);
-    if (unsent.trim().length === 0) {
+    if (state.sent || !state.completed) {
       return;
     }
 
-    if (!force && unsent.length < 32) {
-      state.timer = setTimeout(() => {
-        void this.flush(itemId, true);
-      }, this.flushDelayMs);
+    const text = state.latestText.trim();
+    if (text.length === 0) {
       return;
     }
 
-    await this.sendText(unsent);
-    state.sentLen = state.fullText.length;
-
-    if (force) {
-      this.states.delete(itemId);
-    }
+    state.sent = true;
+    await this.sendText(text);
+    this.states.delete(turnId);
   }
 }
 
@@ -171,7 +134,7 @@ export class BridgeService {
     this.deps.sessions.on(
       'turnCompleted',
       (event: { turnId: string; status: string; error?: { error?: { message?: string }; message?: string } }) => {
-        void this.relay.flushForTurn(event.turnId);
+        this.relay.onTurnCompleted(event.turnId);
 
         if (event.status === 'failed') {
           const message = getErrorMessage(event.error);
