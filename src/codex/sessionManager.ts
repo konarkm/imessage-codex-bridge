@@ -48,6 +48,10 @@ const threadStartResponseSchema = z.object({
   thread: z.object({ id: z.string() }),
 });
 
+const threadResumeResponseSchema = z.object({
+  thread: z.object({ id: z.string() }),
+});
+
 interface SessionManagerOptions {
   rpc: CodexRpcClient;
   store: StateStore;
@@ -80,6 +84,7 @@ export class CodexSessionManager extends EventEmitter {
   private readonly modelPrefix: string;
   private readonly cwd: string;
   private supportsTurnSteer = true;
+  private attachedThreadId: string | null = null;
 
   constructor(opts: SessionManagerOptions) {
     super();
@@ -101,6 +106,7 @@ export class CodexSessionManager extends EventEmitter {
     });
 
     await this.rpc.start();
+    this.attachedThreadId = null;
   }
 
   async stop(): Promise<void> {
@@ -110,7 +116,46 @@ export class CodexSessionManager extends EventEmitter {
   async ensureThread(flags?: BridgeFlags): Promise<string> {
     const session = this.store.getSession(this.trustedPhoneNumber);
     if (session.threadId) {
-      return session.threadId;
+      if (this.attachedThreadId === session.threadId) {
+        return session.threadId;
+      }
+
+      try {
+        const resumeRaw = await this.rpc.request<unknown>('thread/resume', {
+          threadId: session.threadId,
+        });
+        const resumeParsed = threadResumeResponseSchema.safeParse(resumeRaw);
+        if (!resumeParsed.success) {
+          throw new Error(`Invalid thread/resume response: ${resumeParsed.error.message}`);
+        }
+
+        const resumedThreadId = resumeParsed.data.thread.id;
+        this.store.setThreadId(this.trustedPhoneNumber, resumedThreadId);
+        this.attachedThreadId = resumedThreadId;
+        this.store.appendAudit({
+          phoneNumber: this.trustedPhoneNumber,
+          threadId: resumedThreadId,
+          kind: 'system',
+          summary: 'thread resumed',
+          payload: resumeParsed.data,
+        });
+        return resumedThreadId;
+      } catch (error) {
+        if (!isThreadNotFound(error)) {
+          throw error;
+        }
+
+        this.store.appendAudit({
+          phoneNumber: this.trustedPhoneNumber,
+          threadId: session.threadId,
+          kind: 'error',
+          summary: 'thread not found on thread/resume; recreating thread',
+          payload: String(error),
+        });
+
+        this.store.resetRuntime(this.trustedPhoneNumber);
+        this.attachedThreadId = null;
+      }
     }
 
     const approvalPolicy = flags?.autoApprove === false ? 'on-request' : 'never';
@@ -129,6 +174,7 @@ export class CodexSessionManager extends EventEmitter {
 
     const threadId = parsed.data.thread.id;
     this.store.setThreadId(this.trustedPhoneNumber, threadId);
+    this.attachedThreadId = threadId;
     this.store.appendAudit({
       phoneNumber: this.trustedPhoneNumber,
       threadId,
@@ -141,8 +187,9 @@ export class CodexSessionManager extends EventEmitter {
   }
 
   async startOrSteerTurn(text: string, flags: BridgeFlags): Promise<TurnStartResult> {
-    const session = this.store.getSession(this.trustedPhoneNumber);
-    let threadId = session.threadId ?? (await this.ensureThread(flags));
+    let session = this.store.getSession(this.trustedPhoneNumber);
+    let threadId = await this.ensureThread(flags);
+    session = this.store.getSession(this.trustedPhoneNumber);
 
     if (session.activeTurnId && !this.supportsTurnSteer) {
       throw new Error(
@@ -193,7 +240,7 @@ export class CodexSessionManager extends EventEmitter {
         }
 
         if (isThreadNotFound(error)) {
-          this.store.resetRuntime(this.trustedPhoneNumber);
+          this.attachedThreadId = null;
           threadId = await this.ensureThread(flags);
         } else {
           this.store.clearActiveTurn(this.trustedPhoneNumber);
@@ -227,10 +274,11 @@ export class CodexSessionManager extends EventEmitter {
         phoneNumber: this.trustedPhoneNumber,
         threadId,
         kind: 'error',
-        summary: 'thread not found on turn/start; recreating thread',
+        summary: 'thread not found on turn/start; attempting resume',
         payload: String(error),
       });
-      this.store.resetRuntime(this.trustedPhoneNumber);
+
+      this.attachedThreadId = null;
       threadId = await this.ensureThread(flags);
       startRaw = await this.rpc.request<unknown>('turn/start', {
         threadId,
@@ -289,6 +337,7 @@ export class CodexSessionManager extends EventEmitter {
 
   async resetAndCreateNewThread(flags: BridgeFlags): Promise<string> {
     this.store.resetRuntime(this.trustedPhoneNumber);
+    this.attachedThreadId = null;
     return this.ensureThread(flags);
   }
 
@@ -343,6 +392,7 @@ export class CodexSessionManager extends EventEmitter {
         if (!parsed.success) {
           return;
         }
+        this.attachedThreadId = parsed.data.thread.id;
         this.store.setThreadId(this.trustedPhoneNumber, parsed.data.thread.id);
         return;
       }
@@ -356,6 +406,7 @@ export class CodexSessionManager extends EventEmitter {
           return;
         }
 
+        this.attachedThreadId = parsed.data.threadId;
         this.store.setThreadId(this.trustedPhoneNumber, parsed.data.threadId);
         this.store.setActiveTurn(this.trustedPhoneNumber, parsed.data.turn.id);
         this.store.appendAudit({
