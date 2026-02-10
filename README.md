@@ -1,6 +1,6 @@
 # iMessage Codex Bridge
 
-Standalone iMessage-first bridge for Codex app-server using Sendblue.
+iMessage-first bridge for Codex via Sendblue.
 
 ## What this does
 

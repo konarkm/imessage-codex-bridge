@@ -1,7 +1,7 @@
 {
   "name": "imessage-codex-bridge",
   "version": "0.1.0",
-  "description": "iMessage-first bridge for Codex app-server via Sendblue",
+  "description": "iMessage-first bridge for Codex via Sendblue",
   "scripts": {
     "test": "vitest run",
     "build": "tsc -p tsconfig.json",
@@ -9,7 +9,12 @@
     "dev": "tsx src/index.ts",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
-  "keywords": [],
+  "keywords": [
+    "codex",
+    "imessage",
+    "sendblue",
+    "bridge"
+  ],
   "author": "",
   "license": "ISC",
   "type": "module",
