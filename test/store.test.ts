@@ -20,6 +20,9 @@ describe('StateStore', () => {
 
     expect(store.markMessageProcessed('m1')).toBe(true);
     expect(store.markMessageProcessed('m1')).toBe(false);
+    expect(store.hasProcessedMessages()).toBe(true);
+    expect(store.markMessagesProcessed(['m1', 'm2', 'm3'])).toBe(2);
+    expect(store.markMessageProcessed('m2')).toBe(false);
 
     store.setThreadId('15551234567', 'thr_1');
     store.setActiveTurn('15551234567', 'turn_1');

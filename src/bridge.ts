@@ -16,6 +16,7 @@ interface BridgeDeps {
   enableTypingIndicators: boolean;
   enableReadReceipts: boolean;
   enableOutboundUnicodeFormatting: boolean;
+  discardBacklogOnStart: boolean;
   inboundMediaMode: 'url_only';
   typingHeartbeatMs: number;
 }
@@ -91,6 +92,13 @@ export class BridgeService {
     this.running = true;
     await this.deps.sessions.start();
     this.registerSessionEvents();
+
+    try {
+      await this.bootstrapInboundBacklogIfNeeded();
+    } catch (error) {
+      logWarn('Startup backlog bootstrap failed; continuing without discard', error);
+    }
+
     logInfo('Bridge service started');
 
     while (this.running) {
@@ -164,6 +172,39 @@ export class BridgeService {
     } finally {
       this.inPoll = false;
     }
+  }
+
+  private async bootstrapInboundBacklogIfNeeded(): Promise<void> {
+    if (!this.deps.discardBacklogOnStart) {
+      return;
+    }
+
+    if (this.deps.store.hasProcessedMessages()) {
+      return;
+    }
+
+    const messages = await this.deps.sendblue.getInboundMessages(100);
+    const handles = messages
+      .filter((message) => normalizePhone(message.from_number) === this.deps.trustedPhoneNumber)
+      .map((message) => message.message_handle)
+      .filter((handle) => handle.length > 0);
+
+    if (handles.length === 0) {
+      return;
+    }
+
+    const discarded = this.deps.store.markMessagesProcessed(handles);
+    if (discarded < 1) {
+      return;
+    }
+
+    this.deps.store.appendAudit({
+      phoneNumber: this.deps.trustedPhoneNumber,
+      kind: 'system',
+      summary: `startup backlog discarded: ${discarded} message(s)`,
+      payload: { sampledInbound: handles.length },
+    });
+    logInfo(`Discarded ${discarded} pre-existing inbound message(s) at startup`);
   }
 
   private async processInboundMessage(message: SendblueMessage): Promise<void> {

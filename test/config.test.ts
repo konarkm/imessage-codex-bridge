@@ -18,6 +18,7 @@ describe('loadConfig', () => {
       ENABLE_TYPING_INDICATORS: '1',
       ENABLE_READ_RECEIPTS: '1',
       ENABLE_OUTBOUND_UNICODE_FORMATTING: '1',
+      DISCARD_BACKLOG_ON_START: '1',
       INBOUND_MEDIA_MODE: 'url_only',
       TYPING_HEARTBEAT_MS: '10000',
     });
@@ -28,6 +29,7 @@ describe('loadConfig', () => {
     expect(config.bridge.enableTypingIndicators).toBe(true);
     expect(config.bridge.enableReadReceipts).toBe(true);
     expect(config.bridge.enableOutboundUnicodeFormatting).toBe(true);
+    expect(config.bridge.discardBacklogOnStart).toBe(true);
     expect(config.bridge.inboundMediaMode).toBe('url_only');
     expect(config.bridge.typingHeartbeatMs).toBe(10000);
   });
@@ -56,6 +58,7 @@ describe('loadConfig', () => {
       ENABLE_TYPING_INDICATORS: 'false',
       ENABLE_READ_RECEIPTS: '0',
       ENABLE_OUTBOUND_UNICODE_FORMATTING: 'false',
+      DISCARD_BACKLOG_ON_START: 'false',
       INBOUND_MEDIA_MODE: 'url_only',
       TYPING_HEARTBEAT_MS: '9000',
     });
@@ -63,6 +66,7 @@ describe('loadConfig', () => {
     expect(config.bridge.enableTypingIndicators).toBe(false);
     expect(config.bridge.enableReadReceipts).toBe(false);
     expect(config.bridge.enableOutboundUnicodeFormatting).toBe(false);
+    expect(config.bridge.discardBacklogOnStart).toBe(false);
     expect(config.bridge.typingHeartbeatMs).toBe(9000);
   });
 });

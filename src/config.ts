@@ -15,6 +15,7 @@ export interface AppConfig {
     enableTypingIndicators: boolean;
     enableReadReceipts: boolean;
     enableOutboundUnicodeFormatting: boolean;
+    discardBacklogOnStart: boolean;
     inboundMediaMode: 'url_only';
     typingHeartbeatMs: number;
   };
@@ -52,6 +53,10 @@ const envSchema = z.object({
     .enum(['0', '1', 'true', 'false'])
     .default('1')
     .transform((value) => value === '1' || value === 'true'),
+  DISCARD_BACKLOG_ON_START: z
+    .enum(['0', '1', 'true', 'false'])
+    .default('1')
+    .transform((value) => value === '1' || value === 'true'),
   INBOUND_MEDIA_MODE: z.enum(['url_only']).default('url_only'),
   TYPING_HEARTBEAT_MS: z.coerce.number().int().min(3000).max(30000).default(10000),
 });
@@ -86,6 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       enableTypingIndicators: parsed.ENABLE_TYPING_INDICATORS,
       enableReadReceipts: parsed.ENABLE_READ_RECEIPTS,
       enableOutboundUnicodeFormatting: parsed.ENABLE_OUTBOUND_UNICODE_FORMATTING,
+      discardBacklogOnStart: parsed.DISCARD_BACKLOG_ON_START,
       inboundMediaMode: parsed.INBOUND_MEDIA_MODE,
       typingHeartbeatMs: parsed.TYPING_HEARTBEAT_MS,
     },

@@ -77,6 +77,14 @@ Important for current pre-`0.99` setup:
 CODEX_BIN=/absolute/path/to/codex-rs/target/release/codex
 ```
 
+Backlog behavior (recommended default):
+
+```bash
+DISCARD_BACKLOG_ON_START=1
+```
+
+On a brand-new local state DB, this marks current inbound history as seen at startup so only new incoming messages are processed.
+
 Optional: to keep up with upstream Codex changes before `0.99`, refresh/rebuild periodically:
 
 ```bash
@@ -132,6 +140,7 @@ npm run build
 - Requires a Codex app-server build that supports `turn/steer` (latest `origin/main` or `0.99+` once released).
 - Read receipts are best-effort: the Sendblue `mark-read` call can return success while iMessage UI still shows `Delivered`.
 - Outbound formatting defaults to `ENABLE_OUTBOUND_UNICODE_FORMATTING=1` and converts markdown markers like `**bold**`, `*italic*`, and `` `code` ``.
+- Fresh-install safety defaults to `DISCARD_BACKLOG_ON_START=1` so historic inbound messages are not replayed into Codex on first run.
 
 ## TODO
 

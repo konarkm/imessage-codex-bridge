@@ -154,12 +154,29 @@ export class StateStore {
     return row !== undefined;
   }
 
+  hasProcessedMessages(): boolean {
+    const row = this.db
+      .prepare('SELECT 1 AS present FROM inbound_messages LIMIT 1')
+      .get() as { present: number } | undefined;
+    return row !== undefined;
+  }
+
   markMessageProcessed(messageHandle: string): boolean {
     const now = nowMs();
     const result = this.db
       .prepare('INSERT OR IGNORE INTO inbound_messages(message_handle, received_at_ms) VALUES (?, ?)')
       .run(messageHandle, now);
     return result.changes > 0;
+  }
+
+  markMessagesProcessed(messageHandles: string[]): number {
+    let inserted = 0;
+    for (const handle of messageHandles) {
+      if (this.markMessageProcessed(handle)) {
+        inserted += 1;
+      }
+    }
+    return inserted;
   }
 
   getFlags(): BridgeFlags {

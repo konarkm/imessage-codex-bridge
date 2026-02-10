@@ -45,6 +45,7 @@ async function main(): Promise<void> {
     enableTypingIndicators: config.bridge.enableTypingIndicators,
     enableReadReceipts: config.bridge.enableReadReceipts,
     enableOutboundUnicodeFormatting: config.bridge.enableOutboundUnicodeFormatting,
+    discardBacklogOnStart: config.bridge.discardBacklogOnStart,
     inboundMediaMode: config.bridge.inboundMediaMode,
     typingHeartbeatMs: config.bridge.typingHeartbeatMs,
   });
@@ -83,6 +84,7 @@ async function main(): Promise<void> {
   logInfo(`Typing indicators: ${config.bridge.enableTypingIndicators}`);
   logInfo(`Read receipts: ${config.bridge.enableReadReceipts}`);
   logInfo(`Outbound unicode formatting: ${config.bridge.enableOutboundUnicodeFormatting}`);
+  logInfo(`Discard startup backlog: ${config.bridge.discardBacklogOnStart}`);
 
   await bridge.start();
 }
