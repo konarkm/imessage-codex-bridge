@@ -144,6 +144,12 @@ export class CodexSessionManager extends EventEmitter {
     const session = this.store.getSession(this.trustedPhoneNumber);
     let threadId = session.threadId ?? (await this.ensureThread(flags));
 
+    if (session.activeTurnId && !this.supportsTurnSteer) {
+      throw new Error(
+        'Active turn exists but codex app-server does not support turn/steer. Use a newer codex binary (main or 0.99+).',
+      );
+    }
+
     if (session.activeTurnId && this.supportsTurnSteer) {
       try {
         const steerRaw = await this.rpc.request<unknown>('turn/steer', {
@@ -178,15 +184,18 @@ export class CodexSessionManager extends EventEmitter {
             phoneNumber: this.trustedPhoneNumber,
             threadId,
             kind: 'system',
-            summary: 'turn/steer unsupported by codex version; using turn/start fallback',
+            summary: 'turn/steer unsupported by codex version',
             payload: String(error),
           });
+          throw new Error(
+            'Codex app-server does not support turn/steer. Upgrade to a newer codex binary (main or 0.99+).',
+          );
         }
 
         if (isThreadNotFound(error)) {
           this.store.resetRuntime(this.trustedPhoneNumber);
           threadId = await this.ensureThread(flags);
-        } else if (!isUnsupportedTurnSteer(error)) {
+        } else {
           this.store.clearActiveTurn(this.trustedPhoneNumber);
           this.store.appendAudit({
             phoneNumber: this.trustedPhoneNumber,
