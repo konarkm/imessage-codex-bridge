@@ -32,6 +32,15 @@ const itemCompletedSchema = z.object({
   }),
 });
 
+const itemStartedSchema = z.object({
+  threadId: z.string(),
+  turnId: z.string(),
+  item: z.object({
+    type: z.string(),
+    id: z.string().optional(),
+  }),
+});
+
 const threadStartedSchema = z.object({
   thread: z.object({ id: z.string() }),
 });
@@ -347,15 +356,35 @@ export class CodexSessionManager extends EventEmitter {
       return null;
     }
 
-    await this.rpc.request('thread/compact/start', { threadId: session.threadId });
+    let threadId = session.threadId;
+    try {
+      await this.rpc.request('thread/compact/start', { threadId });
+    } catch (error) {
+      if (!isThreadNotFound(error)) {
+        throw error;
+      }
+
+      this.store.appendAudit({
+        phoneNumber: this.trustedPhoneNumber,
+        threadId,
+        kind: 'error',
+        summary: 'thread not found on thread/compact/start; recreating thread',
+        payload: String(error),
+      });
+
+      this.attachedThreadId = null;
+      threadId = await this.ensureThread(this.store.getFlags());
+      await this.rpc.request('thread/compact/start', { threadId });
+    }
+
     this.store.appendAudit({
       phoneNumber: this.trustedPhoneNumber,
-      threadId: session.threadId,
+      threadId,
       kind: 'system',
       summary: 'thread compact requested',
     });
 
-    return session.threadId;
+    return threadId;
   }
 
   async setModel(model: string): Promise<void> {
@@ -473,6 +502,35 @@ export class CodexSessionManager extends EventEmitter {
         this.emit('assistantDelta', parsed.data);
         return;
       }
+      case 'item/started': {
+        const parsed = itemStartedSchema.safeParse(event.params);
+        if (!parsed.success) {
+          return;
+        }
+
+        if (!this.isPrimaryThreadEvent(parsed.data.threadId)) {
+          return;
+        }
+
+        if (parsed.data.item.type === 'contextCompaction') {
+          this.store.appendAudit({
+            phoneNumber: this.trustedPhoneNumber,
+            threadId: parsed.data.threadId,
+            turnId: parsed.data.turnId,
+            kind: 'system',
+            summary: 'context compaction started',
+            payload: event.params,
+          });
+
+          this.emit('compactionStarted', {
+            threadId: parsed.data.threadId,
+            turnId: parsed.data.turnId,
+            itemId: parsed.data.item.id ?? null,
+          });
+        }
+
+        return;
+      }
       case 'item/completed': {
         const parsed = itemCompletedSchema.safeParse(event.params);
         if (!parsed.success) {
@@ -480,6 +538,24 @@ export class CodexSessionManager extends EventEmitter {
         }
 
         if (!this.isPrimaryThreadEvent(parsed.data.threadId)) {
+          return;
+        }
+
+        if (parsed.data.item.type === 'contextCompaction') {
+          this.store.appendAudit({
+            phoneNumber: this.trustedPhoneNumber,
+            threadId: parsed.data.threadId,
+            turnId: parsed.data.turnId,
+            kind: 'system',
+            summary: 'context compaction completed',
+            payload: event.params,
+          });
+
+          this.emit('compactionCompleted', {
+            threadId: parsed.data.threadId,
+            turnId: parsed.data.turnId,
+            itemId: parsed.data.item.id,
+          });
           return;
         }
 

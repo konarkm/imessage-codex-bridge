@@ -125,6 +125,14 @@ export class BridgeService {
     this.deps.sessions.on('approvalDeclinedDueToPolicy', () => {
       void this.enqueueOutbound('Approval request declined by policy (paused or auto-approve disabled).');
     });
+
+    this.deps.sessions.on('compactionStarted', () => {
+      void this.enqueueOutbound('Compaction started.');
+    });
+
+    this.deps.sessions.on('compactionCompleted', () => {
+      void this.enqueueOutbound('Compaction complete.');
+    });
   }
 
   private async pollOnce(): Promise<void> {
@@ -182,9 +190,19 @@ export class BridgeService {
         return;
       }
 
-      const response = await this.executeCommand(command.name, command.args);
-      if (response) {
-        await this.enqueueOutbound(response);
+      try {
+        const response = await this.executeCommand(command.name, command.args);
+        if (response) {
+          await this.enqueueOutbound(response);
+        }
+      } catch (error) {
+        this.deps.store.appendAudit({
+          phoneNumber: fromNumber,
+          kind: 'error',
+          summary: `command failed: /${command.name}`,
+          payload: String(error),
+        });
+        await this.enqueueOutbound(`/${command.name} failed: ${getErrorMessage(error)}`);
       }
       return;
     }
