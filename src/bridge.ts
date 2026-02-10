@@ -34,7 +34,7 @@ class AssistantRelay {
     state.fullText += delta;
 
     if (this.shouldImmediateFlush(state)) {
-      void this.flush(itemId, true);
+      void this.flush(itemId, false);
       return;
     }
 
