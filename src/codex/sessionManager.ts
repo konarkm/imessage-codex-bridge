@@ -352,6 +352,10 @@ export class CodexSessionManager extends EventEmitter {
           return;
         }
 
+        if (!this.isPrimaryThreadEvent(parsed.data.threadId)) {
+          return;
+        }
+
         this.store.setThreadId(this.trustedPhoneNumber, parsed.data.threadId);
         this.store.setActiveTurn(this.trustedPhoneNumber, parsed.data.turn.id);
         this.store.appendAudit({
@@ -368,6 +372,10 @@ export class CodexSessionManager extends EventEmitter {
       case 'turn/completed': {
         const parsed = turnCompletedSchema.safeParse(event.params);
         if (!parsed.success) {
+          return;
+        }
+
+        if (!this.isPrimaryThreadEvent(parsed.data.threadId)) {
           return;
         }
 
@@ -396,6 +404,10 @@ export class CodexSessionManager extends EventEmitter {
           return;
         }
 
+        if (!this.isPrimaryThreadEvent(parsed.data.threadId)) {
+          return;
+        }
+
         this.store.appendAudit({
           phoneNumber: this.trustedPhoneNumber,
           threadId: parsed.data.threadId,
@@ -416,6 +428,10 @@ export class CodexSessionManager extends EventEmitter {
           return;
         }
 
+        if (!this.isPrimaryThreadEvent(parsed.data.threadId)) {
+          return;
+        }
+
         if (parsed.data.item.type === 'agentMessage') {
           this.emit('assistantFinal', {
             threadId: parsed.data.threadId,
@@ -429,6 +445,11 @@ export class CodexSessionManager extends EventEmitter {
       default:
         return;
     }
+  }
+
+  private isPrimaryThreadEvent(threadId: string): boolean {
+    const session = this.store.getSession(this.trustedPhoneNumber);
+    return session.threadId === null || session.threadId === threadId;
   }
 
   private async handleServerRequest(event: RpcServerRequestEvent): Promise<void> {
