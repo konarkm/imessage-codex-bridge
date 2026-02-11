@@ -67,6 +67,8 @@ class AssistantRelay {
 }
 
 export class BridgeService {
+  private static readonly POLL_ERROR_SUPPRESSION_WINDOW_MS = 60_000;
+
   private running = false;
   private inPoll = false;
   private outboundQueue: Promise<void> = Promise.resolve();
@@ -77,6 +79,9 @@ export class BridgeService {
   private typingSendInFlight = false;
   private typingBackoffUntilMs = 0;
   private readonly typingFailureBackoffMs = 30_000;
+  private lastPollErrorSignature: string | null = null;
+  private lastPollErrorAtMs = 0;
+  private suppressedPollErrorCount = 0;
 
   constructor(private readonly deps: BridgeDeps) {
     this.relay = new AssistantRelay(async (text) => {
@@ -105,7 +110,7 @@ export class BridgeService {
       try {
         await this.pollOnce();
       } catch (error) {
-        logError('Poll loop error', error);
+        this.logPollLoopError(error);
       }
       await sleep(this.deps.pollIntervalMs);
     }
@@ -113,6 +118,7 @@ export class BridgeService {
 
   async stop(): Promise<void> {
     this.running = false;
+    this.flushSuppressedPollErrors();
     await this.deps.sessions.stop();
   }
 
@@ -473,6 +479,37 @@ export class BridgeService {
 
   private currentSession(): SessionState {
     return this.deps.store.getSession(this.deps.trustedPhoneNumber);
+  }
+
+  private logPollLoopError(error: unknown): void {
+    const now = Date.now();
+    const signature = getErrorMessage(error);
+    const withinSuppressionWindow =
+      this.lastPollErrorSignature === signature &&
+      now - this.lastPollErrorAtMs < BridgeService.POLL_ERROR_SUPPRESSION_WINDOW_MS;
+
+    if (withinSuppressionWindow) {
+      this.suppressedPollErrorCount += 1;
+      return;
+    }
+
+    this.flushSuppressedPollErrors();
+    logError('Poll loop error', error);
+    this.lastPollErrorSignature = signature;
+    this.lastPollErrorAtMs = now;
+  }
+
+  private flushSuppressedPollErrors(): void {
+    if (this.suppressedPollErrorCount < 1 || !this.lastPollErrorSignature) {
+      this.suppressedPollErrorCount = 0;
+      return;
+    }
+
+    logWarn(`Poll loop error repeated ${this.suppressedPollErrorCount} additional time(s)`, {
+      error: this.lastPollErrorSignature,
+      windowMs: BridgeService.POLL_ERROR_SUPPRESSION_WINDOW_MS,
+    });
+    this.suppressedPollErrorCount = 0;
   }
 
   private async enqueueOutbound(text: string): Promise<void> {
