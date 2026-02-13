@@ -294,7 +294,7 @@ export class CodexSessionManager extends EventEmitter {
 
     if (session.activeTurnId && !this.supportsTurnSteer) {
       throw new Error(
-        'Active turn exists but codex app-server does not support turn/steer. Use a newer codex binary (main or 0.99+).',
+        'Active turn exists but codex app-server does not support turn/steer. Use Codex CLI >= 0.101.0.',
       );
     }
 
@@ -336,7 +336,7 @@ export class CodexSessionManager extends EventEmitter {
             payload: String(error),
           });
           throw new Error(
-            'Codex app-server does not support turn/steer. Upgrade to a newer codex binary (main or 0.99+).',
+            'Codex app-server does not support turn/steer. Upgrade Codex CLI to >= 0.101.0.',
           );
         }
 

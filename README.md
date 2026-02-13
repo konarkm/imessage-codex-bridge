@@ -44,29 +44,15 @@ iMessage-first bridge for Codex via Sendblue.
 
 - Node.js `>=24`
 - Sendblue account with one sending number and one trusted inbound number
-- Codex CLI/app-server with `turn/start` + `turn/steer` support
+- Codex CLI `>=0.101.0` (must include app-server `turn/start` + `turn/steer`)
 
-2. Install/prepare Codex app-server:
-
-Current workaround (until `0.99+` is officially released): build from latest `main` and point `CODEX_BIN` to the built binary.
+2. Verify Codex CLI:
 
 ```bash
-git clone https://github.com/openai/codex.git
-cd codex/codex-rs
-CARGO_PROFILE_RELEASE_LTO=thin cargo build --release -p codex-cli --bin codex
+codex --version
 ```
 
-Binary path will be:
-
-```bash
-<repo>/codex-rs/target/release/codex
-```
-
-When `0.99+` is released, you can use the normal installed `codex` binary and set:
-
-```bash
-CODEX_BIN=codex
-```
+Expected: `0.101.0` or newer.
 
 3. Install bridge dependencies:
 
@@ -76,10 +62,12 @@ npm install
 
 4. Create `.env` from `.env.example` and fill values.
 
-Important for current pre-`0.99` setup:
+Recommended Codex settings:
 
 ```bash
-CODEX_BIN=/absolute/path/to/codex-rs/target/release/codex
+CODEX_BIN=codex
+CODEX_CWD=/absolute/path/to/your/workspace
+CODEX_MODEL=gpt-5.3-codex
 ```
 
 Backlog behavior (recommended default):
@@ -105,17 +93,6 @@ Send webhook requests to:
 POST http://<bridge-host>:8787/notifications/webhook
 Authorization: Bearer <NOTIFICATION_WEBHOOK_SECRET>
 Content-Type: application/json
-```
-
-Optional: to keep up with upstream Codex changes before `0.99`, refresh/rebuild periodically:
-
-```bash
-cd /path/to/codex
-git fetch origin
-git checkout main
-git pull --ff-only
-cd codex-rs
-CARGO_PROFILE_RELEASE_LTO=thin cargo build --release -p codex-cli --bin codex
 ```
 
 5. Start manually for development:
@@ -179,7 +156,7 @@ npm run build
   - `/restart bridge` sends an immediate "restarting" ack, triggers a full bridge restart, then sends a "back online" confirmation after process relaunch.
   - `/restart both` does the same as bridge restart and confirms both are back online after relaunch.
 - Assistant/tool internals are not pushed by default; use `/debug` for timeline.
-- Requires a Codex app-server build that supports `turn/steer` (latest `origin/main` or `0.99+` once released).
+- Requires Codex CLI `>=0.101.0`.
 - Read receipts are best-effort: the Sendblue `mark-read` call can return success while iMessage UI still shows `Delivered`.
 - Outbound formatting defaults to `ENABLE_OUTBOUND_UNICODE_FORMATTING=1` and converts markdown markers like `**bold**`, `*italic*`, and `` `code` ``.
 - Fresh-install safety defaults to `DISCARD_BACKLOG_ON_START=1` so historic inbound messages are not replayed into Codex on first run.
