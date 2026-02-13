@@ -84,12 +84,50 @@ describe('CodexSessionManager spark fallback', () => {
     expect(modelFallbackSpy.mock.calls[0]?.[0]).toMatchObject({
       fromModel: 'gpt-5.3-codex-spark',
       toModel: 'gpt-5.3-codex',
+      toEffort: 'medium',
     });
 
     const callModels = rpc.request.mock.calls
       .filter(([method]) => method === 'thread/start' || method === 'turn/start')
       .map(([, params]) => (params as { model?: string }).model ?? null);
     expect(callModels).toEqual(['gpt-5.3-codex-spark', 'gpt-5.3-codex', 'gpt-5.3-codex']);
+
+    const turnStartCall = rpc.request.mock.calls.find(([method]) => method === 'turn/start');
+    expect((turnStartCall?.[1] as { effort?: string } | undefined)?.effort).toBe('medium');
+
+    store.close();
+    rmSync(dbPath, { force: true });
+  });
+
+  it('toggles spark and restores prior model+effort', async () => {
+    const dbPath = newDbPath();
+    const store = new StateStore(dbPath, 'gpt-5.3-codex');
+    const rpc = new FakeRpcClient();
+    const manager = new CodexSessionManager({
+      rpc: rpc as never,
+      store,
+      trustedPhoneNumber: '+15550001111',
+      defaultModel: 'gpt-5.3-codex',
+      modelPrefix: 'gpt-5.3-codex',
+      cwd: '/tmp',
+    });
+
+    await manager.setModelWithEffort('gpt-5.3-codex', 'low');
+    const enabled = await manager.toggleSparkModel();
+    expect(enabled.enabled).toBe(true);
+    expect(enabled.model).toBe('gpt-5.3-codex-spark');
+    expect(enabled.effort).toBe('xhigh');
+
+    await manager.setEffortForCurrentModel('high');
+
+    const disabled = await manager.toggleSparkModel();
+    expect(disabled.enabled).toBe(false);
+    expect(disabled.model).toBe('gpt-5.3-codex');
+    expect(disabled.effort).toBe('low');
+
+    const status = manager.getStatus();
+    expect(status.model).toBe('gpt-5.3-codex');
+    expect(status.reasoningEffort).toBe('low');
 
     store.close();
     rmSync(dbPath, { force: true });

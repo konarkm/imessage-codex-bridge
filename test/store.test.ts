@@ -40,6 +40,19 @@ describe('StateStore', () => {
     expect(changed.paused).toBe(true);
     expect(changed.autoApprove).toBe(false);
 
+    expect(store.getReasoningEffortForModel('gpt-5.3-codex')).toBe('medium');
+    expect(store.getReasoningEffortForModel('gpt-5.3-codex-spark')).toBe('xhigh');
+    store.setReasoningEffortForModel('gpt-5.3-codex', 'low');
+    store.setReasoningEffortForModel('gpt-5.3-codex-spark', 'high');
+    expect(store.getReasoningEffortForModel('gpt-5.3-codex')).toBe('low');
+    expect(store.getReasoningEffortForModel('gpt-5.3-codex-spark')).toBe('high');
+
+    expect(store.getSparkReturnTarget()).toBeNull();
+    store.setSparkReturnTarget({ model: 'gpt-5.3-codex', effort: 'low' });
+    expect(store.getSparkReturnTarget()).toEqual({ model: 'gpt-5.3-codex', effort: 'low' });
+    store.clearSparkReturnTarget();
+    expect(store.getSparkReturnTarget()).toBeNull();
+
     expect(store.consumePendingBridgeRestartNotice()).toBeNull();
     store.setPendingBridgeRestartNotice('bridge');
     const pendingBridge = store.consumePendingBridgeRestartNotice();

@@ -31,6 +31,8 @@ iMessage-first bridge for Codex via Sendblue.
 - `/thread new`
 - `/compact`
 - `/model <id>`
+- `/effort [level]`
+- `/spark`
 - `/pause` (kill switch)
 - `/resume`
 - `/notifications [count] [source]`
@@ -165,6 +167,11 @@ npm run build
 - v1 is text outbound; inbound media is forwarded to Codex as URL context.
 - v1 is single-trusted-user only.
 - Supported Codex models include `gpt-5.3-codex` and `gpt-5.3-codex-spark`.
+- Reasoning effort is model-specific and persisted per model (`none|minimal|low|medium|high|xhigh`).
+- Default reasoning effort is `medium` for non-spark models and `xhigh` for spark models.
+- `/effort` shows/sets effort for the current model.
+- `/model` can optionally set effort inline (for example `/model gpt-5.3-codex-spark-low` or `/model gpt-5.3-codex-spark low`).
+- `/spark` toggles between the current model and spark, preserving the prior model+effort pair.
 - If `gpt-5.3-codex-spark` is selected but unavailable for the current account, the bridge automatically falls back to `gpt-5.3-codex` and sends a user-visible notice.
 - Notification decisions use per-turn `outputSchema` (`send` vs `suppress`) and are audited in SQLite.
 - Restart controls:

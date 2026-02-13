@@ -7,6 +7,8 @@ export type CommandName =
   | 'thread'
   | 'compact'
   | 'model'
+  | 'effort'
+  | 'spark'
   | 'pause'
   | 'resume'
   | 'notifications'
@@ -27,6 +29,8 @@ const COMMANDS = new Set<CommandName>([
   'thread',
   'compact',
   'model',
+  'effort',
+  'spark',
   'pause',
   'resume',
   'notifications',
@@ -74,6 +78,8 @@ export function helpText(): string {
     '/thread new - start a new thread',
     '/compact - request Codex thread compaction',
     '/model <id> - set model (e.g. gpt-5.3-codex or gpt-5.3-codex-spark)',
+    '/effort [level] - view or set reasoning effort for current model',
+    '/spark - toggle between current model and spark',
     '/pause - emergency kill-switch (pause turns, disable auto-approve)',
     '/resume - re-enable turns and auto-approve',
     '/notifications [count] [source] - show recent notifications',

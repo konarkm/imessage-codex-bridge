@@ -109,6 +109,8 @@ export interface BridgeFlags {
   autoApprove: boolean;
 }
 
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface InputText {
   type: 'text';
   text: string;

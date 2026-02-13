@@ -5,6 +5,7 @@ import type { NotificationDecision, NotificationRecord, NotificationSource } fro
 import { parseSlashCommand, helpText } from './router/commands.js';
 import { SendblueClient } from './sendblue/client.js';
 import { StateStore } from './state/store.js';
+import type { ReasoningEffort } from './types.js';
 import { normalizePhone, sleep } from './utils.js';
 import { CodexSessionManager } from './codex/sessionManager.js';
 import type { SendblueMessage, SessionState } from './types.js';
@@ -230,10 +231,9 @@ export class BridgeService {
       void this.enqueueOutbound('Compaction complete.');
     });
 
-    this.deps.sessions.on('modelFallback', (event: { fromModel: string; toModel: string }) => {
-      void this.enqueueOutbound(
-        `${event.fromModel} is unavailable for this account. Switched to ${event.toModel}.`,
-      );
+    this.deps.sessions.on('modelFallback', (event: { fromModel: string; toModel: string; toEffort?: string }) => {
+      const suffix = event.toEffort ? ` (effort: ${event.toEffort})` : '';
+      void this.enqueueOutbound(`${event.fromModel} is unavailable for this account. Switched to ${event.toModel}${suffix}.`);
     });
   }
 
@@ -762,12 +762,43 @@ export class BridgeService {
             'Allowed models:',
             '- gpt-5.3-codex',
             '- gpt-5.3-codex-spark',
+            'Optional effort on same command:',
+            '- /model gpt-5.3-codex-spark-low',
+            '- /model gpt-5.3-codex-spark low',
             `Allowed prefix policy: ${this.deps.modelPrefix}`,
           ].join('\n');
         }
-        const model = args.join(' ').trim();
-        await this.deps.sessions.setModel(model);
-        return `Model set: ${model}`;
+        const parsed = this.parseModelCommandArgs(args);
+        if (!parsed) {
+          return 'Usage: /model <id> [effort]';
+        }
+
+        const result = parsed.effort
+          ? await this.deps.sessions.setModelWithEffort(parsed.model, parsed.effort)
+          : await this.deps.sessions.setModel(parsed.model);
+
+        return `Model set: ${result.model}\nEffort: ${result.effort}`;
+      }
+      case 'effort': {
+        if (args.length === 0) {
+          const status = this.deps.sessions.getStatus();
+          const options = this.deps.sessions.getReasoningEffortOptions().join(', ');
+          return `Model: ${status.model}\nEffort: ${status.reasoningEffort}\nAllowed efforts: ${options}`;
+        }
+
+        const effort = normalizeReasoningEffort(args[0] ?? '');
+        if (!effort) {
+          return `Usage: /effort <${this.deps.sessions.getReasoningEffortOptions().join('|')}>`;
+        }
+
+        const updated = await this.deps.sessions.setEffortForCurrentModel(effort);
+        return `Reasoning effort set.\nModel: ${updated.model}\nEffort: ${updated.effort}`;
+      }
+      case 'spark': {
+        const toggled = await this.deps.sessions.toggleSparkModel();
+        return toggled.enabled
+          ? `Spark enabled.\nModel: ${toggled.model}\nEffort: ${toggled.effort}`
+          : `Spark disabled.\nModel: ${toggled.model}\nEffort: ${toggled.effort}`;
       }
       case 'pause':
         this.deps.store.setPaused(true);
@@ -794,9 +825,41 @@ export class BridgeService {
       `thread: ${status.threadId ?? '(none)'}`,
       `active_turn: ${status.activeTurnId ?? '(none)'}`,
       `model: ${status.model}`,
+      `effort: ${status.reasoningEffort}`,
       `paused: ${status.paused}`,
       `auto_approve: ${status.autoApprove}`,
     ].join('\n');
+  }
+
+  private parseModelCommandArgs(args: string[]): { model: string; effort?: ReasoningEffort } | null {
+    const normalizedArgs = args.map((part) => part.trim()).filter((part) => part.length > 0);
+    if (normalizedArgs.length === 0) {
+      return null;
+    }
+
+    if (normalizedArgs.length >= 2) {
+      const maybeEffort = normalizeReasoningEffort(normalizedArgs[normalizedArgs.length - 1] ?? '');
+      if (maybeEffort) {
+        const modelCandidate = normalizedArgs.slice(0, -1).join(' ').trim();
+        if (modelCandidate.length === 0) {
+          return null;
+        }
+        return {
+          model: modelCandidate,
+          effort: maybeEffort,
+        };
+      }
+    }
+
+    const modelCandidate = normalizedArgs.join(' ').trim();
+    const parsedSuffix = parseModelWithEffortSuffix(modelCandidate, this.deps.modelPrefix);
+    if (parsedSuffix) {
+      return parsedSuffix;
+    }
+
+    return {
+      model: modelCandidate,
+    };
   }
 
   private renderDebugTimeline(): string {
@@ -1085,6 +1148,38 @@ function sortMessagesAscending(messages: SendblueMessage[]): SendblueMessage[] {
   const copy = [...messages];
   copy.sort((a, b) => getMessageTs(a) - getMessageTs(b));
   return copy;
+}
+
+function parseModelWithEffortSuffix(
+  value: string,
+  requiredPrefix: string,
+): { model: string; effort: ReasoningEffort } | null {
+  const candidate = value.trim();
+  if (!candidate.startsWith(requiredPrefix)) {
+    return null;
+  }
+
+  const efforts: ReasoningEffort[] = ['xhigh', 'minimal', 'medium', 'high', 'low', 'none'];
+  for (const effort of efforts) {
+    const suffix = `-${effort}`;
+    if (!candidate.toLowerCase().endsWith(suffix)) {
+      continue;
+    }
+
+    const model = candidate.slice(0, -suffix.length).trim();
+    if (!model.startsWith(requiredPrefix)) {
+      continue;
+    }
+    return { model, effort };
+  }
+
+  return null;
+}
+
+function normalizeReasoningEffort(value: string): ReasoningEffort | null {
+  const normalized = value.trim().toLowerCase();
+  const efforts: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+  return efforts.includes(normalized as ReasoningEffort) ? (normalized as ReasoningEffort) : null;
 }
 
 function getMessageTs(message: SendblueMessage): number {

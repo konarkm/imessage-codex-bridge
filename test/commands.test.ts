@@ -26,6 +26,18 @@ describe('parseSlashCommand', () => {
       args: ['codex'],
       raw: '/restart codex',
     });
+
+    expect(parseSlashCommand('/effort high')).toEqual({
+      name: 'effort',
+      args: ['high'],
+      raw: '/effort high',
+    });
+
+    expect(parseSlashCommand('/spark')).toEqual({
+      name: 'spark',
+      args: [],
+      raw: '/spark',
+    });
   });
 
   it('returns null for unknown commands or non-commands', () => {
@@ -43,5 +55,7 @@ describe('helpText', () => {
     expect(text).toContain('/debug');
     expect(text).toContain('/notifications');
     expect(text).toContain('/restart <codex|bridge|both>');
+    expect(text).toContain('/effort [level]');
+    expect(text).toContain('/spark');
   });
 });

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { NotificationRecord, NotificationSource, NotificationStatus } from '../notifications/types.js';
 import { logWarn } from '../logger.js';
 import { StateStore } from '../state/store.js';
-import type { BridgeFlags, JsonRpcId } from '../types.js';
+import type { BridgeFlags, JsonRpcId, ReasoningEffort } from '../types.js';
 import { nowMs } from '../utils.js';
 import { CodexRpcClient, type RpcNotificationEvent, type RpcServerRequestEvent } from './rpcClient.js';
 
@@ -89,6 +89,7 @@ const notificationSearchArgsSchema = z.object({
 
 const STANDARD_CODEX_MODEL = 'gpt-5.3-codex';
 const SPARK_CODEX_MODEL = 'gpt-5.3-codex-spark';
+const REASONING_EFFORTS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
 interface SessionManagerOptions {
   rpc: CodexRpcClient;
@@ -110,6 +111,7 @@ export interface SessionStatus {
   threadId: string | null;
   activeTurnId: string | null;
   model: string;
+  reasoningEffort: ReasoningEffort;
   paused: boolean;
   autoApprove: boolean;
 }
@@ -362,6 +364,7 @@ export class CodexSessionManager extends EventEmitter {
         threadId,
         input: [asTextInput(text)],
         model: currentSession.model,
+        effort: this.store.getReasoningEffortForModel(currentSession.model),
         approvalPolicy: flags.autoApprove ? 'never' : 'on-request',
         sandboxPolicy: { type: 'dangerFullAccess' },
         cwd: this.cwd,
@@ -424,6 +427,7 @@ export class CodexSessionManager extends EventEmitter {
         threadId,
         input: [asTextInput(args.text)],
         model: currentSession.model,
+        effort: this.store.getReasoningEffortForModel(currentSession.model),
         approvalPolicy: args.flags.autoApprove ? 'never' : 'on-request',
         sandboxPolicy: { type: 'dangerFullAccess' },
         cwd: this.cwd,
@@ -546,18 +550,95 @@ export class CodexSessionManager extends EventEmitter {
     return threadId;
   }
 
-  async setModel(model: string): Promise<void> {
+  async setModel(model: string): Promise<{ model: string; effort: ReasoningEffort }> {
     if (!model.startsWith(this.modelPrefix)) {
       throw new Error(`Model must start with ${this.modelPrefix}`);
     }
 
     this.store.setModel(this.trustedPhoneNumber, model);
+    const effort = this.store.getReasoningEffortForModel(model);
     this.store.appendAudit({
       phoneNumber: this.trustedPhoneNumber,
       kind: 'system',
       summary: 'model updated',
-      payload: { model },
+      payload: { model, effort },
     });
+    return { model, effort };
+  }
+
+  async setModelWithEffort(model: string, effort: ReasoningEffort): Promise<{ model: string; effort: ReasoningEffort }> {
+    const normalized = normalizeReasoningEffort(effort);
+    if (!normalized) {
+      throw new Error(`Unsupported reasoning effort: ${effort}`);
+    }
+
+    const updated = await this.setModel(model);
+    this.store.setReasoningEffortForModel(updated.model, normalized);
+    this.store.appendAudit({
+      phoneNumber: this.trustedPhoneNumber,
+      kind: 'system',
+      summary: 'model effort updated',
+      payload: { model: updated.model, effort: normalized },
+    });
+    return {
+      model: updated.model,
+      effort: normalized,
+    };
+  }
+
+  async setEffortForCurrentModel(effort: ReasoningEffort): Promise<{ model: string; effort: ReasoningEffort }> {
+    const normalized = normalizeReasoningEffort(effort);
+    if (!normalized) {
+      throw new Error(`Unsupported reasoning effort: ${effort}`);
+    }
+
+    const session = this.store.getSession(this.trustedPhoneNumber);
+    this.store.setReasoningEffortForModel(session.model, normalized);
+    this.store.appendAudit({
+      phoneNumber: this.trustedPhoneNumber,
+      kind: 'system',
+      summary: 'reasoning effort updated',
+      payload: { model: session.model, effort: normalized },
+    });
+    return {
+      model: session.model,
+      effort: normalized,
+    };
+  }
+
+  async toggleSparkModel(): Promise<{ enabled: boolean; model: string; effort: ReasoningEffort }> {
+    const session = this.store.getSession(this.trustedPhoneNumber);
+    const currentModel = session.model;
+    const currentEffort = this.store.getReasoningEffortForModel(currentModel);
+
+    if (isSparkModel(currentModel)) {
+      const target = this.store.getSparkReturnTarget();
+      this.store.clearSparkReturnTarget();
+      const model = target?.model ?? STANDARD_CODEX_MODEL;
+      const effort = target?.effort ?? this.store.getReasoningEffortForModel(model);
+      const updated = await this.setModelWithEffort(model, effort);
+      return {
+        enabled: false,
+        model: updated.model,
+        effort: updated.effort,
+      };
+    }
+
+    this.store.setSparkReturnTarget({
+      model: currentModel,
+      effort: currentEffort,
+    });
+    const sparkEffort = this.store.getReasoningEffortForModel(SPARK_CODEX_MODEL);
+    const updated = await this.setModelWithEffort(SPARK_CODEX_MODEL, sparkEffort);
+    return {
+      enabled: true,
+      model: updated.model,
+      effort: updated.effort,
+    };
+  }
+
+  getReasoningEffortOptions(): ReasoningEffort[] {
+    return [...REASONING_EFFORTS];
   }
 
   private async requestWithSparkModelFallback<T>(
@@ -587,6 +668,7 @@ export class CodexSessionManager extends EventEmitter {
 
     const reason = getErrorMessage(error);
     this.store.setModel(this.trustedPhoneNumber, STANDARD_CODEX_MODEL);
+    const toEffort = this.store.getReasoningEffortForModel(STANDARD_CODEX_MODEL);
     this.store.appendAudit({
       phoneNumber: this.trustedPhoneNumber,
       kind: 'system',
@@ -594,6 +676,7 @@ export class CodexSessionManager extends EventEmitter {
       payload: {
         fromModel: SPARK_CODEX_MODEL,
         toModel: STANDARD_CODEX_MODEL,
+        toEffort,
         operation,
         reason,
       },
@@ -601,6 +684,7 @@ export class CodexSessionManager extends EventEmitter {
     this.emit('modelFallback', {
       fromModel: SPARK_CODEX_MODEL,
       toModel: STANDARD_CODEX_MODEL,
+      toEffort,
       operation,
       reason,
     });
@@ -615,6 +699,7 @@ export class CodexSessionManager extends EventEmitter {
       threadId: session.threadId,
       activeTurnId: session.activeTurnId,
       model: session.model,
+      reasoningEffort: this.store.getReasoningEffortForModel(session.model),
       paused: flags.paused,
       autoApprove: flags.autoApprove,
     };
@@ -946,6 +1031,15 @@ function isSparkModelAccessError(error: unknown): boolean {
     lower.includes('pro');
 
   return sparkMentioned && accessSignal;
+}
+
+function normalizeReasoningEffort(value: string): ReasoningEffort | null {
+  const normalized = value.trim().toLowerCase() as ReasoningEffort;
+  return REASONING_EFFORTS.includes(normalized) ? normalized : null;
+}
+
+function isSparkModel(model: string): boolean {
+  return model.toLowerCase().includes('spark');
 }
 
 function getErrorMessage(error: unknown): string {

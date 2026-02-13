@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { NotificationDecision, NotificationEvent, NotificationListQuery, NotificationRecord, NotificationSearchQuery } from '../notifications/types.js';
-import type { AuditEvent, AuditKind, BridgeFlags, SessionState } from '../types.js';
+import type { AuditEvent, AuditKind, BridgeFlags, ReasoningEffort, SessionState } from '../types.js';
 import { ensureDirForFile, nowMs } from '../utils.js';
 
 interface SessionRow {
@@ -52,6 +52,13 @@ export interface PendingBridgeRestartNotice {
   target: 'bridge' | 'both';
   requestedAtMs: number;
 }
+
+interface SparkReturnTarget {
+  model: string;
+  effort: ReasoningEffort;
+}
+
+const REASONING_EFFORT_LEVELS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
 export class StateStore {
   private static readonly SCHEMA_VERSION = 2;
@@ -257,6 +264,36 @@ export class StateStore {
     this.setFlag('auto_approve', value ? '1' : '0');
   }
 
+  getReasoningEffortForModel(model: string): ReasoningEffort {
+    const map = this.getReasoningEffortMap();
+    return map[model] ?? defaultReasoningEffortForModel(model);
+  }
+
+  setReasoningEffortForModel(model: string, effort: ReasoningEffort): void {
+    if (!REASONING_EFFORT_LEVELS.includes(effort)) {
+      throw new Error(`Unsupported reasoning effort: ${effort}`);
+    }
+    const map = this.getReasoningEffortMap();
+    map[model] = effort;
+    this.setFlag('reasoning_effort_by_model', JSON.stringify(map));
+  }
+
+  setSparkReturnTarget(target: SparkReturnTarget): void {
+    this.setFlag('spark_return_target', JSON.stringify(target));
+  }
+
+  getSparkReturnTarget(): SparkReturnTarget | null {
+    const row = this.db.prepare('SELECT value FROM flags WHERE key = ?').get('spark_return_target') as { value: string } | undefined;
+    if (!row) {
+      return null;
+    }
+    return parseSparkReturnTarget(row.value);
+  }
+
+  clearSparkReturnTarget(): void {
+    this.db.prepare('DELETE FROM flags WHERE key = ?').run('spark_return_target');
+  }
+
   setPendingBridgeRestartNotice(target: PendingBridgeRestartNotice['target']): void {
     const payload: PendingBridgeRestartNotice = {
       target,
@@ -297,6 +334,26 @@ export class StateStore {
          DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms`,
       )
       .run(key, value, now);
+  }
+
+  private getReasoningEffortMap(): Record<string, ReasoningEffort> {
+    const row = this.db.prepare('SELECT value FROM flags WHERE key = ?').get('reasoning_effort_by_model') as { value: string } | undefined;
+    if (!row) {
+      return {};
+    }
+
+    try {
+      const parsed = JSON.parse(row.value) as Record<string, unknown>;
+      const result: Record<string, ReasoningEffort> = {};
+      for (const [model, effort] of Object.entries(parsed)) {
+        if (typeof effort === 'string' && REASONING_EFFORT_LEVELS.includes(effort as ReasoningEffort)) {
+          result[model] = effort as ReasoningEffort;
+        }
+      }
+      return result;
+    } catch {
+      return {};
+    }
   }
 
   appendAudit(entry: {
@@ -586,6 +643,27 @@ function parsePendingBridgeRestartNotice(raw: string): PendingBridgeRestartNotic
     // ignore malformed payloads
   }
   return null;
+}
+
+function parseSparkReturnTarget(raw: string): SparkReturnTarget | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<SparkReturnTarget>;
+    if (parsed && typeof parsed.model === 'string' && typeof parsed.effort === 'string') {
+      if (REASONING_EFFORT_LEVELS.includes(parsed.effort as ReasoningEffort)) {
+        return {
+          model: parsed.model,
+          effort: parsed.effort as ReasoningEffort,
+        };
+      }
+    }
+  } catch {
+    // ignore malformed payloads
+  }
+  return null;
+}
+
+function defaultReasoningEffortForModel(model: string): ReasoningEffort {
+  return model.toLowerCase().includes('spark') ? 'xhigh' : 'medium';
 }
 
 function parseNotificationRow(row: NotificationRow): NotificationRecord {
