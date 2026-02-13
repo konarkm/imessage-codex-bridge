@@ -95,23 +95,25 @@ Authorization: Bearer <NOTIFICATION_WEBHOOK_SECRET>
 Content-Type: application/json
 ```
 
-5. Start manually for development:
+5. Start the bridge:
 
 ```bash
-./scripts/run-dev.sh
+./scripts/run.sh
 ```
 
 6. Keep it running in a terminal:
 
-`./scripts/run-dev.sh` now supervises intentional restarts:
+`./scripts/run.sh` supervises intentional restarts:
 
 - if bridge exits with code `42` (from `/restart bridge` or `/restart both`), it relaunches automatically.
 - for other non-zero exits, it stops so crash loops remain visible.
 
+`./scripts/run-dev.sh` is kept as a compatibility alias and forwards to `./scripts/run.sh`.
+
 7. Optional detached mode via tmux:
 
 ```bash
-tmux new -s imessage-bridge 'cd /absolute/path/to/imessage-codex-bridge && ./scripts/run-dev.sh'
+tmux new -s imessage-bridge 'cd /absolute/path/to/imessage-codex-bridge && ./scripts/run.sh'
 ```
 
 8. In iMessage, text from trusted number to the Sendblue number.
