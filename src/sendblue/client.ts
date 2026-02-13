@@ -13,12 +13,37 @@ interface SendblueConfig {
   inboundMaxBackoffMs?: number;
 }
 
+const phoneFieldSchema = z
+  .union([z.string(), z.array(z.string()), z.null(), z.undefined()])
+  .transform((value) => {
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.find((entry) => typeof entry === 'string' && entry.trim().length > 0) ?? '';
+    }
+    return '';
+  });
+
+const optionalPhoneFieldSchema = z
+  .union([z.string(), z.array(z.string()), z.null(), z.undefined()])
+  .transform((value) => {
+    if (typeof value === 'string') {
+      return value.trim().length > 0 ? value : undefined;
+    }
+    if (Array.isArray(value)) {
+      const found = value.find((entry) => typeof entry === 'string' && entry.trim().length > 0);
+      return found ?? undefined;
+    }
+    return undefined;
+  });
+
 const messageSchema = z.object({
   message_handle: z.string(),
   content: z.string().nullish().transform((value) => value ?? ''),
-  from_number: z.string(),
-  to_number: z.string().default(''),
-  number: z.string().optional(),
+  from_number: phoneFieldSchema,
+  to_number: phoneFieldSchema,
+  number: optionalPhoneFieldSchema,
   status: z.string().optional(),
   date_sent: z.string().optional(),
   date_updated: z.string().optional(),
