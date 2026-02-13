@@ -73,7 +73,7 @@ export function helpText(): string {
     '/thread - show current thread id',
     '/thread new - start a new thread',
     '/compact - request Codex thread compaction',
-    '/model <id> - set model (must match allowed prefix)',
+    '/model <id> - set model (e.g. gpt-5.3-codex or gpt-5.3-codex-spark)',
     '/pause - emergency kill-switch (pause turns, disable auto-approve)',
     '/resume - re-enable turns and auto-approve',
     '/notifications [count] [source] - show recent notifications',

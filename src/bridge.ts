@@ -229,6 +229,12 @@ export class BridgeService {
     this.deps.sessions.on('compactionCompleted', () => {
       void this.enqueueOutbound('Compaction complete.');
     });
+
+    this.deps.sessions.on('modelFallback', (event: { fromModel: string; toModel: string }) => {
+      void this.enqueueOutbound(
+        `${event.fromModel} is unavailable for this account. Switched to ${event.toModel}.`,
+      );
+    });
   }
 
   private async pollOnce(): Promise<void> {

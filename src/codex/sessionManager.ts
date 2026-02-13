@@ -87,6 +87,9 @@ const notificationSearchArgsSchema = z.object({
   limit: z.number().int().min(1).max(200).optional(),
 });
 
+const STANDARD_CODEX_MODEL = 'gpt-5.3-codex';
+const SPARK_CODEX_MODEL = 'gpt-5.3-codex-spark';
+
 interface SessionManagerOptions {
   rpc: CodexRpcClient;
   store: StateStore;
@@ -228,18 +231,21 @@ export class CodexSessionManager extends EventEmitter {
     }
 
     const approvalPolicy = flags?.autoApprove === false ? 'on-request' : 'never';
-    const threadStartParams = {
-      model: session.model || this.defaultModel,
-      cwd: this.cwd,
-      approvalPolicy,
-      sandbox: 'danger-full-access' as const,
-      experimentalRawEvents: false,
-      dynamicTools: notificationDynamicTools,
+    const makeThreadStartParams = () => {
+      const currentSession = this.store.getSession(this.trustedPhoneNumber);
+      return {
+        model: currentSession.model || this.defaultModel,
+        cwd: this.cwd,
+        approvalPolicy,
+        sandbox: 'danger-full-access' as const,
+        experimentalRawEvents: false,
+        dynamicTools: notificationDynamicTools,
+      };
     };
 
     let raw: unknown;
     try {
-      raw = await this.rpc.request<unknown>('thread/start', threadStartParams);
+      raw = await this.requestWithSparkModelFallback('thread/start', makeThreadStartParams, 'thread/start');
     } catch (error) {
       if (!isThreadStartTimeout(error)) {
         throw error;
@@ -257,7 +263,7 @@ export class CodexSessionManager extends EventEmitter {
       await this.rpc.stop();
       await this.rpc.start();
       this.attachedThreadId = null;
-      raw = await this.rpc.request<unknown>('thread/start', threadStartParams);
+      raw = await this.requestWithSparkModelFallback('thread/start', makeThreadStartParams, 'thread/start retry');
     }
 
     const parsed = threadStartResponseSchema.safeParse(raw);
@@ -336,6 +342,7 @@ export class CodexSessionManager extends EventEmitter {
           this.attachedThreadId = null;
           threadId = await this.ensureThread(flags);
         } else {
+          this.maybeFallbackFromSparkModel(error, 'turn/steer');
           this.store.clearActiveTurn(this.trustedPhoneNumber);
           this.store.appendAudit({
             phoneNumber: this.trustedPhoneNumber,
@@ -349,15 +356,19 @@ export class CodexSessionManager extends EventEmitter {
     }
 
     let startRaw: unknown;
-    try {
-      startRaw = await this.rpc.request<unknown>('turn/start', {
+    const makeTurnStartParams = () => {
+      const currentSession = this.store.getSession(this.trustedPhoneNumber);
+      return {
         threadId,
         input: [asTextInput(text)],
-        model: session.model,
+        model: currentSession.model,
         approvalPolicy: flags.autoApprove ? 'never' : 'on-request',
         sandboxPolicy: { type: 'dangerFullAccess' },
         cwd: this.cwd,
-      });
+      };
+    };
+    try {
+      startRaw = await this.requestWithSparkModelFallback('turn/start', makeTurnStartParams, 'turn/start');
     } catch (error) {
       if (!isThreadNotFound(error)) {
         throw error;
@@ -373,14 +384,7 @@ export class CodexSessionManager extends EventEmitter {
 
       this.attachedThreadId = null;
       threadId = await this.ensureThread(flags);
-      startRaw = await this.rpc.request<unknown>('turn/start', {
-        threadId,
-        input: [asTextInput(text)],
-        model: session.model,
-        approvalPolicy: flags.autoApprove ? 'never' : 'on-request',
-        sandboxPolicy: { type: 'dangerFullAccess' },
-        cwd: this.cwd,
-      });
+      startRaw = await this.requestWithSparkModelFallback('turn/start', makeTurnStartParams, 'turn/start retry');
     }
 
     const startParsed = turnStartResponseSchema.safeParse(startRaw);
@@ -411,20 +415,27 @@ export class CodexSessionManager extends EventEmitter {
     flags: BridgeFlags;
     outputSchema: unknown;
   }): Promise<TurnStartResult> {
-    const session = this.store.getSession(this.trustedPhoneNumber);
     let threadId = await this.ensureThread(args.flags);
 
     let startRaw: unknown;
-    try {
-      startRaw = await this.rpc.request<unknown>('turn/start', {
+    const makeNotificationStartParams = () => {
+      const currentSession = this.store.getSession(this.trustedPhoneNumber);
+      return {
         threadId,
         input: [asTextInput(args.text)],
-        model: session.model,
+        model: currentSession.model,
         approvalPolicy: args.flags.autoApprove ? 'never' : 'on-request',
         sandboxPolicy: { type: 'dangerFullAccess' },
         cwd: this.cwd,
         outputSchema: args.outputSchema,
-      });
+      };
+    };
+    try {
+      startRaw = await this.requestWithSparkModelFallback(
+        'turn/start',
+        makeNotificationStartParams,
+        'notification turn/start',
+      );
     } catch (error) {
       if (!isThreadNotFound(error)) {
         throw error;
@@ -440,15 +451,11 @@ export class CodexSessionManager extends EventEmitter {
 
       this.attachedThreadId = null;
       threadId = await this.ensureThread(args.flags);
-      startRaw = await this.rpc.request<unknown>('turn/start', {
-        threadId,
-        input: [asTextInput(args.text)],
-        model: session.model,
-        approvalPolicy: args.flags.autoApprove ? 'never' : 'on-request',
-        sandboxPolicy: { type: 'dangerFullAccess' },
-        cwd: this.cwd,
-        outputSchema: args.outputSchema,
-      });
+      startRaw = await this.requestWithSparkModelFallback(
+        'turn/start',
+        makeNotificationStartParams,
+        'notification turn/start retry',
+      );
     }
 
     const startParsed = turnStartResponseSchema.safeParse(startRaw);
@@ -551,6 +558,53 @@ export class CodexSessionManager extends EventEmitter {
       summary: 'model updated',
       payload: { model },
     });
+  }
+
+  private async requestWithSparkModelFallback<T>(
+    method: string,
+    makeParams: () => unknown,
+    operation: string,
+  ): Promise<T> {
+    try {
+      return await this.rpc.request<T>(method, makeParams());
+    } catch (error) {
+      const fellBack = this.maybeFallbackFromSparkModel(error, operation);
+      if (!fellBack) {
+        throw error;
+      }
+      return await this.rpc.request<T>(method, makeParams());
+    }
+  }
+
+  private maybeFallbackFromSparkModel(error: unknown, operation: string): boolean {
+    const session = this.store.getSession(this.trustedPhoneNumber);
+    if (session.model !== SPARK_CODEX_MODEL) {
+      return false;
+    }
+    if (!isSparkModelAccessError(error)) {
+      return false;
+    }
+
+    const reason = getErrorMessage(error);
+    this.store.setModel(this.trustedPhoneNumber, STANDARD_CODEX_MODEL);
+    this.store.appendAudit({
+      phoneNumber: this.trustedPhoneNumber,
+      kind: 'system',
+      summary: 'spark model unavailable; fell back to standard model',
+      payload: {
+        fromModel: SPARK_CODEX_MODEL,
+        toModel: STANDARD_CODEX_MODEL,
+        operation,
+        reason,
+      },
+    });
+    this.emit('modelFallback', {
+      fromModel: SPARK_CODEX_MODEL,
+      toModel: STANDARD_CODEX_MODEL,
+      operation,
+      reason,
+    });
+    return true;
   }
 
   getStatus(): SessionStatus {
@@ -867,6 +921,31 @@ function isThreadStartTimeout(error: unknown): boolean {
     return false;
   }
   return message.includes('RPC request timed out: thread/start');
+}
+
+function isSparkModelAccessError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== 'string') {
+    return false;
+  }
+
+  const lower = message.toLowerCase();
+  const sparkMentioned = lower.includes(SPARK_CODEX_MODEL);
+  const accessSignal =
+    lower.includes('not available') ||
+    lower.includes('not permitted') ||
+    lower.includes('not enabled') ||
+    lower.includes('insufficient') ||
+    lower.includes('permission') ||
+    lower.includes('access denied') ||
+    lower.includes('unauthorized') ||
+    lower.includes('forbidden') ||
+    lower.includes('pro');
+
+  return sparkMentioned && accessSignal;
 }
 
 function getErrorMessage(error: unknown): string {

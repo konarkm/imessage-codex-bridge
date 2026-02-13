@@ -164,6 +164,8 @@ npm run build
 
 - v1 is text outbound; inbound media is forwarded to Codex as URL context.
 - v1 is single-trusted-user only.
+- Supported Codex models include `gpt-5.3-codex` and `gpt-5.3-codex-spark`.
+- If `gpt-5.3-codex-spark` is selected but unavailable for the current account, the bridge automatically falls back to `gpt-5.3-codex` and sends a user-visible notice.
 - Notification decisions use per-turn `outputSchema` (`send` vs `suppress`) and are audited in SQLite.
 - Restart controls:
   - `/restart codex` sends an immediate "restarting" ack, restarts only the Codex app-server child, then sends a "back online" confirmation.
