@@ -77,7 +77,7 @@ export function helpText(): string {
     '/thread - show current thread id',
     '/thread new - start a new thread',
     '/compact - request Codex thread compaction',
-    '/model <id> - set model (e.g. gpt-5.3-codex or gpt-5.3-codex-spark)',
+    '/model <id> [effort] - set model (e.g. gpt-5.3-codex or gpt-5.3-codex-spark, supports /model ...-low)',
     '/effort [level] - view or set reasoning effort for current model',
     '/spark - toggle between current model and spark',
     '/pause - emergency kill-switch (pause turns, disable auto-approve)',
