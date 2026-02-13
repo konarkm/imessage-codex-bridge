@@ -83,6 +83,13 @@ export type AuditKind =
   | 'agent_delta'
   | 'approval_request'
   | 'approval_response'
+  | 'notification_ingested'
+  | 'notification_duplicate'
+  | 'notification_queued'
+  | 'notification_processing'
+  | 'notification_sent'
+  | 'notification_suppressed'
+  | 'notification_failed'
   | 'error'
   | 'system';
 
