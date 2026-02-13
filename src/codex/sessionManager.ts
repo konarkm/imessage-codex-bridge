@@ -148,6 +148,40 @@ export class CodexSessionManager extends EventEmitter {
     await this.rpc.stop();
   }
 
+  async restartCodex(flags: BridgeFlags): Promise<{ threadId: string | null }> {
+    this.store.appendAudit({
+      phoneNumber: this.trustedPhoneNumber,
+      kind: 'system',
+      summary: 'codex restart requested',
+    });
+
+    await this.rpc.stop();
+    await this.rpc.start();
+    this.attachedThreadId = null;
+    this.store.clearActiveTurn(this.trustedPhoneNumber);
+
+    let threadId: string | null = null;
+    try {
+      threadId = await this.ensureThread(flags);
+    } catch (error) {
+      this.store.appendAudit({
+        phoneNumber: this.trustedPhoneNumber,
+        kind: 'error',
+        summary: 'codex restarted but failed to reattach thread',
+        payload: String(error),
+      });
+    }
+
+    this.store.appendAudit({
+      phoneNumber: this.trustedPhoneNumber,
+      threadId,
+      kind: 'system',
+      summary: 'codex restart complete',
+    });
+
+    return { threadId };
+  }
+
   async ensureThread(flags?: BridgeFlags): Promise<string> {
     const session = this.store.getSession(this.trustedPhoneNumber);
     if (session.threadId) {

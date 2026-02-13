@@ -7,6 +7,8 @@ import { NotificationWebhookServer } from './notifications/webhookServer.js';
 import { SendblueClient } from './sendblue/client.js';
 import { StateStore } from './state/store.js';
 
+const EXIT_CODE_RESTART = 42;
+
 async function main(): Promise<void> {
   const config = loadConfig();
 
@@ -76,12 +78,12 @@ async function main(): Promise<void> {
   });
 
   let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
+  const finalizeAndExit = async (exitCode: number, reason: string): Promise<void> => {
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
-    logInfo(`Received ${signal}, shutting down...`);
+    logInfo(`Finalizing bridge runtime (${reason})...`);
 
     try {
       await bridge.stop();
@@ -90,8 +92,16 @@ async function main(): Promise<void> {
     } catch (error) {
       logError('Shutdown error', error);
     } finally {
-      process.exit(0);
+      process.exit(exitCode);
     }
+  };
+
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) {
+      return;
+    }
+    logInfo(`Received ${signal}, shutting down...`);
+    await finalizeAndExit(0, signal);
   };
 
   process.on('SIGINT', () => {
@@ -116,6 +126,14 @@ async function main(): Promise<void> {
 
   await webhookServer.start();
   await bridge.start();
+  const restartRequested = bridge.consumeRestartRequested();
+  if (restartRequested) {
+    logInfo(`Bridge restart requested; exiting with ${EXIT_CODE_RESTART} for supervisor relaunch.`);
+    await finalizeAndExit(EXIT_CODE_RESTART, 'restart requested');
+    return;
+  }
+
+  await finalizeAndExit(0, 'bridge loop ended');
 }
 
 void main().catch((error) => {

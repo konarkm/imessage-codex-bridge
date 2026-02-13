@@ -99,6 +99,7 @@ export class BridgeService {
   private readonly turnContexts = new Map<string, TurnContext>();
   private lastNotificationPruneAtMs = 0;
   private static readonly NOTIFICATION_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
+  private restartRequested = false;
 
   constructor(private readonly deps: BridgeDeps) {
     this.relay = new AssistantRelay(async (text) => {
@@ -137,6 +138,12 @@ export class BridgeService {
     this.running = false;
     this.flushSuppressedPollErrors();
     await this.deps.sessions.stop();
+  }
+
+  consumeRestartRequested(): boolean {
+    const requested = this.restartRequested;
+    this.restartRequested = false;
+    return requested;
   }
 
   async ingestNotification(args: {
@@ -235,6 +242,13 @@ export class BridgeService {
 
       for (const message of sorted) {
         await this.processInboundMessage(message);
+        if (!this.running) {
+          break;
+        }
+      }
+
+      if (!this.running) {
+        return;
       }
 
       await this.maybeProcessQueuedNotification();
@@ -715,7 +729,7 @@ export class BridgeService {
       case 'reset': {
         const flags = this.deps.store.getFlags();
         const threadId = await this.deps.sessions.resetAndCreateNewThread(flags);
-        this.turnContexts.clear();
+        this.clearTurnTracking();
         return `Reset complete.\nThread: ${threadId}`;
       }
       case 'debug':
@@ -724,7 +738,7 @@ export class BridgeService {
         if (args[0] === 'new') {
           const flags = this.deps.store.getFlags();
           const threadId = await this.deps.sessions.resetAndCreateNewThread(flags);
-          this.turnContexts.clear();
+          this.clearTurnTracking();
           return `New thread started: ${threadId}`;
         }
         const session = this.currentSession();
@@ -752,6 +766,8 @@ export class BridgeService {
         return 'Resumed. New turns enabled. Auto-approve enabled.';
       case 'notifications':
         return this.renderNotifications(args);
+      case 'restart':
+        return this.handleRestartCommand(args);
       default:
         return 'Unknown command. Use /help';
     }
@@ -813,6 +829,52 @@ export class BridgeService {
       lines.push(`${time} [${row.source}] [${row.status}] ${idShort} dup=${row.duplicateCount} ${row.summary}`);
     }
     return lines.join('\n');
+  }
+
+  private async handleRestartCommand(args: string[]): Promise<string> {
+    const target = (args[0] ?? '').toLowerCase();
+    if (!target) {
+      return 'Usage: /restart <codex|bridge|both>';
+    }
+
+    if (target === 'codex') {
+      const flags = this.deps.store.getFlags();
+      const { threadId } = await this.deps.sessions.restartCodex(flags);
+      this.clearTurnTracking();
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        kind: 'system',
+        summary: 'restart command handled: codex',
+        payload: { threadId },
+      });
+      return `Codex restarted.\nThread: ${threadId ?? '(none)'}`;
+    }
+
+    if (target === 'bridge' || target === 'both') {
+      this.requestBridgeRestart(target);
+      return 'Restarting bridge now...';
+    }
+
+    return 'Usage: /restart <codex|bridge|both>';
+  }
+
+  private requestBridgeRestart(target: 'bridge' | 'both'): void {
+    this.restartRequested = true;
+    this.running = false;
+    this.clearTurnTracking();
+    this.deps.store.appendAudit({
+      phoneNumber: this.deps.trustedPhoneNumber,
+      kind: 'system',
+      summary: `restart command handled: ${target}`,
+      payload: { exitCode: 42 },
+    });
+  }
+
+  private clearTurnTracking(): void {
+    this.turnContexts.clear();
+    this.typingTurnId = null;
+    this.typingItemId = null;
+    this.lastTypingSentAtMs = 0;
   }
 
   private currentSession(): SessionState {

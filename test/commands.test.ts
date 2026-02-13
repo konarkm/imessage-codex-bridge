@@ -20,6 +20,12 @@ describe('parseSlashCommand', () => {
       args: ['20', 'webhook'],
       raw: '/notifications 20 webhook',
     });
+
+    expect(parseSlashCommand('/restart codex')).toEqual({
+      name: 'restart',
+      args: ['codex'],
+      raw: '/restart codex',
+    });
   });
 
   it('returns null for unknown commands or non-commands', () => {
@@ -36,5 +42,6 @@ describe('helpText', () => {
     expect(text).toContain('/resume');
     expect(text).toContain('/debug');
     expect(text).toContain('/notifications');
+    expect(text).toContain('/restart <codex|bridge|both>');
   });
 });

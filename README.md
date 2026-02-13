@@ -34,6 +34,7 @@ iMessage-first bridge for Codex via Sendblue.
 - `/pause` (kill switch)
 - `/resume`
 - `/notifications [count] [source]`
+- `/restart <codex|bridge|both>`
 
 ## Setup
 
@@ -123,9 +124,10 @@ CARGO_PROFILE_RELEASE_LTO=thin cargo build --release -p codex-cli --bin codex
 
 6. Keep it running in a terminal:
 
-```bash
-while true; do ./scripts/run-dev.sh; echo "bridge exited, restarting in 2s"; sleep 2; done
-```
+`./scripts/run-dev.sh` now supervises intentional restarts:
+
+- if bridge exits with code `42` (from `/restart bridge` or `/restart both`), it relaunches automatically.
+- for other non-zero exits, it stops so crash loops remain visible.
 
 7. Optional detached mode via tmux:
 
@@ -163,6 +165,9 @@ npm run build
 - v1 is text outbound; inbound media is forwarded to Codex as URL context.
 - v1 is single-trusted-user only.
 - Notification decisions use per-turn `outputSchema` (`send` vs `suppress`) and are audited in SQLite.
+- Restart controls:
+  - `/restart codex` restarts only the Codex app-server child.
+  - `/restart bridge` and `/restart both` trigger a full bridge restart (requires launching via `./scripts/run-dev.sh` for auto-relaunch).
 - Assistant/tool internals are not pushed by default; use `/debug` for timeline.
 - Requires a Codex app-server build that supports `turn/steer` (latest `origin/main` or `0.99+` once released).
 - Read receipts are best-effort: the Sendblue `mark-read` call can return success while iMessage UI still shows `Delivered`.

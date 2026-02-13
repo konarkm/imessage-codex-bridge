@@ -9,7 +9,8 @@ export type CommandName =
   | 'model'
   | 'pause'
   | 'resume'
-  | 'notifications';
+  | 'notifications'
+  | 'restart';
 
 export interface ParsedCommand {
   name: CommandName;
@@ -29,6 +30,7 @@ const COMMANDS = new Set<CommandName>([
   'pause',
   'resume',
   'notifications',
+  'restart',
 ]);
 
 export function parseSlashCommand(input: string): ParsedCommand | null {
@@ -75,5 +77,6 @@ export function helpText(): string {
     '/pause - emergency kill-switch (pause turns, disable auto-approve)',
     '/resume - re-enable turns and auto-approve',
     '/notifications [count] [source] - show recent notifications',
+    '/restart <codex|bridge|both> - restart runtime components',
   ].join('\n');
 }
