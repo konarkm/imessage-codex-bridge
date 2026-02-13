@@ -757,7 +757,13 @@ export class BridgeService {
       }
       case 'model': {
         if (args.length === 0) {
-          return `Usage: /model <id>\nAllowed prefix: ${this.deps.modelPrefix}`;
+          return [
+            'Usage: /model <id>',
+            'Allowed models:',
+            '- gpt-5.3-codex',
+            '- gpt-5.3-codex-spark',
+            `Allowed prefix policy: ${this.deps.modelPrefix}`,
+          ].join('\n');
         }
         const model = args.join(' ').trim();
         await this.deps.sessions.setModel(model);
