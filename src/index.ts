@@ -3,6 +3,7 @@ import { loadConfig } from './config.js';
 import { CodexRpcClient } from './codex/rpcClient.js';
 import { CodexSessionManager } from './codex/sessionManager.js';
 import { logError, logInfo } from './logger.js';
+import { NotificationWebhookServer } from './notifications/webhookServer.js';
 import { SendblueClient } from './sendblue/client.js';
 import { StateStore } from './state/store.js';
 
@@ -48,6 +49,30 @@ async function main(): Promise<void> {
     discardBacklogOnStart: config.bridge.discardBacklogOnStart,
     inboundMediaMode: config.bridge.inboundMediaMode,
     typingHeartbeatMs: config.bridge.typingHeartbeatMs,
+    notificationTurnsEnabled: config.notifications.enabled,
+    notificationRawExcerptBytes: config.notifications.rawExcerptBytes,
+    notificationRetentionDays: config.notifications.retentionDays,
+    notificationMaxRows: config.notifications.maxRows,
+  });
+
+  const webhookServer = new NotificationWebhookServer({
+    enabled: config.notifications.webhook.enabled,
+    host: config.notifications.webhook.host,
+    port: config.notifications.webhook.port,
+    path: config.notifications.webhook.path,
+    secret: config.notifications.webhook.secret,
+    onNotification: async (input) => {
+      const result = await bridge.ingestNotification({
+        payload: input.payload,
+        source: 'webhook',
+        sourceAccount: input.sourceAccount,
+        sourceEventId: input.sourceEventId,
+      });
+      return {
+        notificationId: result.notificationId,
+        duplicate: result.duplicate,
+      };
+    },
   });
 
   let shuttingDown = false;
@@ -60,6 +85,7 @@ async function main(): Promise<void> {
 
     try {
       await bridge.stop();
+      await webhookServer.stop();
       store.close();
     } catch (error) {
       logError('Shutdown error', error);
@@ -85,7 +111,10 @@ async function main(): Promise<void> {
   logInfo(`Read receipts: ${config.bridge.enableReadReceipts}`);
   logInfo(`Outbound unicode formatting: ${config.bridge.enableOutboundUnicodeFormatting}`);
   logInfo(`Discard startup backlog: ${config.bridge.discardBacklogOnStart}`);
+  logInfo(`Notification turns enabled: ${config.notifications.enabled}`);
+  logInfo(`Notification webhook enabled: ${config.notifications.webhook.enabled}`);
 
+  await webhookServer.start();
   await bridge.start();
 }
 

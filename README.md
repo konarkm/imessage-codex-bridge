@@ -9,6 +9,7 @@ iMessage-first bridge for Codex via Sendblue.
 - Forwards inbound media as attachment URLs into Codex context.
 - Sends typing indicators and best-effort read receipts through Sendblue (configurable).
 - Applies optional outbound Markdown-to-Unicode styling for iMessage readability.
+- Accepts authenticated webhook notifications and routes them through Codex notification turns.
 - Supports interrupt/reset/debug/control commands.
 - Keeps structured local audit logs in SQLite.
 
@@ -32,6 +33,7 @@ iMessage-first bridge for Codex via Sendblue.
 - `/model <id>`
 - `/pause` (kill switch)
 - `/resume`
+- `/notifications [count] [source]`
 
 ## Setup
 
@@ -84,6 +86,23 @@ DISCARD_BACKLOG_ON_START=1
 ```
 
 On a brand-new local state DB, this marks current inbound history as seen at startup so only new incoming messages are processed.
+
+Notification webhook setup:
+
+```bash
+ENABLE_NOTIFICATION_WEBHOOK=1
+NOTIFICATION_WEBHOOK_SECRET=<long-random-secret>
+NOTIFICATION_WEBHOOK_PORT=8787
+NOTIFICATION_WEBHOOK_PATH=/notifications/webhook
+```
+
+Send webhook requests to:
+
+```bash
+POST http://<bridge-host>:8787/notifications/webhook
+Authorization: Bearer <NOTIFICATION_WEBHOOK_SECRET>
+Content-Type: application/json
+```
 
 Optional: to keep up with upstream Codex changes before `0.99`, refresh/rebuild periodically:
 
@@ -143,11 +162,13 @@ npm run build
 
 - v1 is text outbound; inbound media is forwarded to Codex as URL context.
 - v1 is single-trusted-user only.
+- Notification decisions use per-turn `outputSchema` (`send` vs `suppress`) and are audited in SQLite.
 - Assistant/tool internals are not pushed by default; use `/debug` for timeline.
 - Requires a Codex app-server build that supports `turn/steer` (latest `origin/main` or `0.99+` once released).
 - Read receipts are best-effort: the Sendblue `mark-read` call can return success while iMessage UI still shows `Delivered`.
 - Outbound formatting defaults to `ENABLE_OUTBOUND_UNICODE_FORMATTING=1` and converts markdown markers like `**bold**`, `*italic*`, and `` `code` ``.
 - Fresh-install safety defaults to `DISCARD_BACKLOG_ON_START=1` so historic inbound messages are not replayed into Codex on first run.
+- Notification retention defaults: 90 days plus 25,000-row cap.
 
 ## TODO
 

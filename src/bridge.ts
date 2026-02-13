@@ -1,4 +1,7 @@
 import { logError, logInfo, logWarn } from './logger.js';
+import { normalizeNotification } from './notifications/normalize.js';
+import { parseNotificationDecision, notificationDecisionOutputSchema } from './notifications/schema.js';
+import type { NotificationDecision, NotificationRecord, NotificationSource } from './notifications/types.js';
 import { parseSlashCommand, helpText } from './router/commands.js';
 import { SendblueClient } from './sendblue/client.js';
 import { StateStore } from './state/store.js';
@@ -19,6 +22,17 @@ interface BridgeDeps {
   discardBacklogOnStart: boolean;
   inboundMediaMode: 'url_only';
   typingHeartbeatMs: number;
+  notificationTurnsEnabled: boolean;
+  notificationRawExcerptBytes: number;
+  notificationRetentionDays: number;
+  notificationMaxRows: number;
+}
+
+interface TurnContext {
+  mode: 'user' | 'notification';
+  notificationId?: string;
+  attempt?: number;
+  latestAssistantText?: string;
 }
 
 class AssistantRelay {
@@ -82,6 +96,9 @@ export class BridgeService {
   private lastPollErrorSignature: string | null = null;
   private lastPollErrorAtMs = 0;
   private suppressedPollErrorCount = 0;
+  private readonly turnContexts = new Map<string, TurnContext>();
+  private lastNotificationPruneAtMs = 0;
+  private static readonly NOTIFICATION_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
 
   constructor(private readonly deps: BridgeDeps) {
     this.relay = new AssistantRelay(async (text) => {
@@ -122,30 +139,74 @@ export class BridgeService {
     await this.deps.sessions.stop();
   }
 
+  async ingestNotification(args: {
+    payload: unknown;
+    source?: NotificationSource;
+    sourceAccount?: string | null;
+    sourceEventId?: string | null;
+  }): Promise<{ notificationId: string; duplicate: boolean }> {
+    const normalized = normalizeNotification({
+      payload: args.payload,
+      source: args.source ?? 'webhook',
+      sourceAccount: args.sourceAccount,
+      sourceEventId: args.sourceEventId,
+      rawExcerptBytes: this.deps.notificationRawExcerptBytes,
+    });
+
+    const result = this.deps.store.appendNotification(normalized);
+    if (result.inserted) {
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        kind: 'notification_ingested',
+        summary: `${normalized.source} notification ingested`,
+        payload: {
+          notificationId: normalized.id,
+          sourceEventId: normalized.sourceEventId,
+          summary: normalized.summary,
+        },
+      });
+    } else {
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        kind: 'notification_duplicate',
+        summary: `${normalized.source} notification duplicate`,
+        payload: {
+          dedupeKey: normalized.dedupeKey,
+          duplicateOf: result.duplicateOf,
+        },
+      });
+    }
+
+    return {
+      notificationId: result.id,
+      duplicate: !result.inserted,
+    };
+  }
+
   private registerSessionEvents(): void {
     this.deps.sessions.on('assistantDelta', (event: { itemId: string; turnId: string; delta: string }) => {
       this.relay.onDelta(event.itemId, event.turnId, event.delta);
-      void this.maybeSendTypingIndicator(event.turnId, event.itemId);
+      const context = this.turnContexts.get(event.turnId);
+      if (!context || context.mode === 'user') {
+        void this.maybeSendTypingIndicator(event.turnId, event.itemId);
+      }
     });
 
     this.deps.sessions.on('assistantFinal', (event: { itemId: string; turnId: string; text: string }) => {
-      this.relay.onFinal(event.itemId, event.turnId, event.text);
+      const context = this.turnContexts.get(event.turnId);
+      if (!context || context.mode === 'user') {
+        this.relay.onFinal(event.itemId, event.turnId, event.text);
+        return;
+      }
+
+      context.latestAssistantText = event.text.trim();
+      this.turnContexts.set(event.turnId, context);
     });
 
     this.deps.sessions.on(
       'turnCompleted',
       (event: { turnId: string; status: string; error?: { error?: { message?: string }; message?: string } }) => {
-        this.relay.onTurnCompleted(event.turnId);
-        this.clearTypingStateForTurn(event.turnId);
-
-        if (event.status === 'failed') {
-          const message = getErrorMessage(event.error);
-          void this.enqueueOutbound(`Turn failed: ${message}`);
-        }
-
-        if (event.status === 'interrupted') {
-          void this.enqueueOutbound('Interrupted.');
-        }
+        void this.handleTurnCompleted(event);
       },
     );
 
@@ -175,6 +236,9 @@ export class BridgeService {
       for (const message of sorted) {
         await this.processInboundMessage(message);
       }
+
+      await this.maybeProcessQueuedNotification();
+      this.maybePruneNotifications();
     } finally {
       this.inPoll = false;
     }
@@ -282,6 +346,235 @@ export class BridgeService {
     }
   }
 
+  private async maybeProcessQueuedNotification(): Promise<void> {
+    if (!this.deps.notificationTurnsEnabled) {
+      return;
+    }
+
+    const session = this.currentSession();
+    if (session.activeTurnId) {
+      return;
+    }
+
+    const queued = this.deps.store.claimNextQueuedNotification();
+    if (!queued) {
+      return;
+    }
+
+    await this.startNotificationTurn(queued, 1);
+  }
+
+  private async startNotificationTurn(notification: NotificationRecord, attempt: number): Promise<void> {
+    const flags = this.deps.store.getFlags();
+    const prompt = formatNotificationPrompt(notification);
+    try {
+      const result = await this.deps.sessions.startNotificationTurn({
+        text: prompt,
+        flags,
+        outputSchema: notificationDecisionOutputSchema,
+      });
+
+      this.turnContexts.set(result.turnId, {
+        mode: 'notification',
+        notificationId: notification.id,
+        attempt,
+        latestAssistantText: '',
+      });
+      this.deps.store.markNotificationProcessing(notification.id, result.threadId, result.turnId);
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        threadId: result.threadId,
+        turnId: result.turnId,
+        kind: 'notification_processing',
+        summary: `notification turn started (attempt ${attempt})`,
+        payload: {
+          notificationId: notification.id,
+          source: notification.source,
+        },
+      });
+    } catch (error) {
+      this.deps.store.recordNotificationFailure({
+        id: notification.id,
+        errorText: getErrorMessage(error),
+      });
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        kind: 'notification_failed',
+        summary: 'notification turn failed to start',
+        payload: {
+          notificationId: notification.id,
+          attempt,
+          error: getErrorMessage(error),
+        },
+      });
+    }
+  }
+
+  private async handleTurnCompleted(event: {
+    turnId: string;
+    status: string;
+    error?: { error?: { message?: string }; message?: string };
+  }): Promise<void> {
+    this.relay.onTurnCompleted(event.turnId);
+    this.clearTypingStateForTurn(event.turnId);
+
+    const context = this.turnContexts.get(event.turnId);
+    this.turnContexts.delete(event.turnId);
+
+    if (!context || context.mode === 'user') {
+      if (event.status === 'failed') {
+        const message = getErrorMessage(event.error);
+        await this.enqueueOutbound(`Turn failed: ${message}`);
+      }
+
+      if (event.status === 'interrupted') {
+        await this.enqueueOutbound('Interrupted.');
+      }
+      return;
+    }
+
+    await this.handleNotificationTurnCompleted(event, context);
+  }
+
+  private async handleNotificationTurnCompleted(
+    event: { turnId: string; status: string; error?: { error?: { message?: string }; message?: string } },
+    context: TurnContext,
+  ): Promise<void> {
+    const notificationId = context.notificationId;
+    if (!notificationId) {
+      return;
+    }
+
+    if (event.status === 'failed' || event.status === 'interrupted') {
+      this.deps.store.recordNotificationFailure({
+        id: notificationId,
+        threadId: this.currentSession().threadId,
+        turnId: event.turnId,
+        errorText: `notification turn ${event.status}: ${getErrorMessage(event.error)}`,
+      });
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        turnId: event.turnId,
+        kind: 'notification_failed',
+        summary: `notification turn ${event.status}`,
+        payload: { notificationId, error: getErrorMessage(event.error) },
+      });
+      return;
+    }
+
+    const rawText = (context.latestAssistantText ?? '').trim();
+    const decision = parseNotificationDecision(rawText);
+
+    if (!decision) {
+      const attempt = context.attempt ?? 1;
+      if (attempt < 2) {
+        const notification = this.deps.store.getNotificationById(notificationId);
+        if (notification) {
+          this.deps.store.appendAudit({
+            phoneNumber: this.deps.trustedPhoneNumber,
+            turnId: event.turnId,
+            kind: 'notification_failed',
+            summary: 'notification decision invalid; retrying once',
+            payload: { notificationId, attempt },
+          });
+          await this.startNotificationTurn(notification, attempt + 1);
+          return;
+        }
+      }
+
+      const fallbackText = rawText || 'Notification received, but decision output was invalid.';
+      await this.enqueueOutbound(fallbackText);
+      this.deps.store.recordNotificationFailure({
+        id: notificationId,
+        threadId: this.currentSession().threadId,
+        turnId: event.turnId,
+        errorText: 'notification decision invalid after retry; raw fallback sent',
+      });
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        turnId: event.turnId,
+        kind: 'notification_failed',
+        summary: 'notification decision invalid after retry; sent raw fallback',
+        payload: { notificationId, fallback: fallbackText },
+      });
+      return;
+    }
+
+    await this.applyNotificationDecision({
+      notificationId,
+      turnId: event.turnId,
+      decision,
+    });
+  }
+
+  private async applyNotificationDecision(args: {
+    notificationId: string;
+    turnId: string;
+    decision: NotificationDecision;
+  }): Promise<void> {
+    const notification = this.deps.store.getNotificationById(args.notificationId);
+    const fallbackMessage = notification ? formatNotificationFallbackMessage(notification) : 'Notification received.';
+    const resolvedMessage = (args.decision.message ?? '').trim() || fallbackMessage;
+
+    if (args.decision.delivery === 'suppress') {
+      this.deps.store.recordNotificationDecision({
+        id: args.notificationId,
+        status: 'suppressed',
+        decision: args.decision,
+        threadId: this.currentSession().threadId,
+        turnId: args.turnId,
+      });
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        turnId: args.turnId,
+        kind: 'notification_suppressed',
+        summary: 'notification suppressed',
+        payload: { notificationId: args.notificationId, reasonCode: args.decision.reasonCode ?? null },
+      });
+      return;
+    }
+
+    await this.enqueueOutbound(resolvedMessage);
+    this.deps.store.recordNotificationDecision({
+      id: args.notificationId,
+      status: 'sent',
+      decision: {
+        ...args.decision,
+        message: resolvedMessage,
+      },
+      threadId: this.currentSession().threadId,
+      turnId: args.turnId,
+    });
+    this.deps.store.appendAudit({
+      phoneNumber: this.deps.trustedPhoneNumber,
+      turnId: args.turnId,
+      kind: 'notification_sent',
+      summary: 'notification sent',
+      payload: { notificationId: args.notificationId, reasonCode: args.decision.reasonCode ?? null },
+    });
+  }
+
+  private maybePruneNotifications(): void {
+    const now = Date.now();
+    if (now - this.lastNotificationPruneAtMs < BridgeService.NOTIFICATION_PRUNE_INTERVAL_MS) {
+      return;
+    }
+
+    this.lastNotificationPruneAtMs = now;
+    const pruned = this.deps.store.pruneNotifications(
+      now,
+      this.deps.notificationRetentionDays,
+      this.deps.notificationMaxRows,
+    );
+    if (pruned > 0) {
+      this.deps.store.appendAudit({
+        phoneNumber: this.deps.trustedPhoneNumber,
+        kind: 'system',
+        summary: `notification retention prune removed ${pruned} row(s)`,
+      });
+    }
+  }
+
   private async handleUserText(text: string): Promise<boolean> {
     const flags = this.deps.store.getFlags();
     if (flags.paused) {
@@ -289,8 +582,18 @@ export class BridgeService {
       return false;
     }
 
+    const session = this.currentSession();
+    if (session.activeTurnId) {
+      const activeContext = this.turnContexts.get(session.activeTurnId);
+      if (activeContext?.mode === 'notification') {
+        await this.enqueueOutbound('Processing a notification turn. Please retry in a moment.');
+        return false;
+      }
+    }
+
     try {
       const result = await this.deps.sessions.startOrSteerTurn(text, flags);
+      this.turnContexts.set(result.turnId, { mode: 'user' });
       this.deps.store.appendAudit({
         phoneNumber: this.deps.trustedPhoneNumber,
         threadId: result.threadId,
@@ -412,6 +715,7 @@ export class BridgeService {
       case 'reset': {
         const flags = this.deps.store.getFlags();
         const threadId = await this.deps.sessions.resetAndCreateNewThread(flags);
+        this.turnContexts.clear();
         return `Reset complete.\nThread: ${threadId}`;
       }
       case 'debug':
@@ -420,6 +724,7 @@ export class BridgeService {
         if (args[0] === 'new') {
           const flags = this.deps.store.getFlags();
           const threadId = await this.deps.sessions.resetAndCreateNewThread(flags);
+          this.turnContexts.clear();
           return `New thread started: ${threadId}`;
         }
         const session = this.currentSession();
@@ -445,6 +750,8 @@ export class BridgeService {
         this.deps.store.setPaused(false);
         this.deps.store.setAutoApprove(true);
         return 'Resumed. New turns enabled. Auto-approve enabled.';
+      case 'notifications':
+        return this.renderNotifications(args);
       default:
         return 'Unknown command. Use /help';
     }
@@ -473,6 +780,37 @@ export class BridgeService {
     for (const event of events) {
       const time = new Date(event.tsMs).toISOString().split('T')[1]?.replace('Z', '') ?? '';
       lines.push(`${time} ${event.kind}: ${event.summary}`);
+    }
+    return lines.join('\n');
+  }
+
+  private renderNotifications(args: string[]): string {
+    const first = args[0]?.toLowerCase();
+    const second = args[1]?.toLowerCase();
+    const sourceFromFirst = first && isValidNotificationSource(first) ? first : null;
+    const countRaw = sourceFromFirst ? '20' : args[0] ?? '20';
+    const sourceRaw = (sourceFromFirst ?? second ?? 'all').toLowerCase();
+    const count = Number.parseInt(countRaw, 10);
+    if (!Number.isFinite(count) || count < 1 || count > 200) {
+      return 'Usage: /notifications [count:1-200] [source:all|webhook|cron|heartbeat]';
+    }
+    if (!isValidNotificationSource(sourceRaw)) {
+      return 'Usage: /notifications [count:1-200] [source:all|webhook|cron|heartbeat]';
+    }
+
+    const rows = this.deps.store.listNotifications({
+      count,
+      source: sourceRaw as NotificationSource | 'all',
+    });
+    if (rows.length === 0) {
+      return 'No notifications found.';
+    }
+
+    const lines = [`Notifications (${rows.length})`];
+    for (const row of rows) {
+      const time = new Date(row.receivedAtMs).toISOString();
+      const idShort = row.id.slice(0, 12);
+      lines.push(`${time} [${row.source}] [${row.status}] ${idShort} dup=${row.duplicateCount} ${row.summary}`);
     }
     return lines.join('\n');
   }
@@ -685,4 +1023,33 @@ function getErrorMessage(error: unknown): string {
     }
   }
   return 'unknown error';
+}
+
+function formatNotificationPrompt(notification: NotificationRecord): string {
+  const payloadNote = notification.rawTruncated
+    ? `${notification.rawExcerpt}\n[raw payload truncated]`
+    : notification.rawExcerpt;
+
+  return [
+    'You are processing an inbound notification.',
+    'Decide whether to notify the user.',
+    'Return ONLY valid JSON matching the output schema for this turn.',
+    `notification_id: ${notification.id}`,
+    `source: ${notification.source}`,
+    `received_at: ${new Date(notification.receivedAtMs).toISOString()}`,
+    `summary: ${notification.summary}`,
+    `raw_excerpt: ${payloadNote}`,
+    'Guidance:',
+    '- Use {"delivery":"suppress"} for low-signal/no-actionable events.',
+    '- Use {"delivery":"send","message":"..."} for important events.',
+    '- Include "reasonCode" when useful.',
+  ].join('\n');
+}
+
+function formatNotificationFallbackMessage(notification: NotificationRecord): string {
+  return `Notification (${notification.source}): ${notification.summary}`;
+}
+
+function isValidNotificationSource(value: string): value is NotificationSource | 'all' {
+  return value === 'all' || value === 'webhook' || value === 'cron' || value === 'heartbeat';
 }

@@ -19,6 +19,20 @@ export interface AppConfig {
     inboundMediaMode: 'url_only';
     typingHeartbeatMs: number;
   };
+  notifications: {
+    enabled: boolean;
+    rawExcerptBytes: number;
+    retentionDays: number;
+    maxRows: number;
+    heartbeatSourceEnabled: boolean;
+    webhook: {
+      enabled: boolean;
+      host: string;
+      port: number;
+      path: string;
+      secret: string;
+    };
+  };
   trustedPhoneNumber: string;
   codex: {
     bin: string;
@@ -59,6 +73,29 @@ const envSchema = z.object({
     .transform((value) => value === '1' || value === 'true'),
   INBOUND_MEDIA_MODE: z.enum(['url_only']).default('url_only'),
   TYPING_HEARTBEAT_MS: z.coerce.number().int().min(3000).max(30000).default(10000),
+  ENABLE_NOTIFICATION_TURNS: z
+    .enum(['0', '1', 'true', 'false'])
+    .default('1')
+    .transform((value) => value === '1' || value === 'true'),
+  NOTIFICATION_RAW_EXCERPT_BYTES: z.coerce.number().int().min(256).max(32768).default(4096),
+  NOTIFICATION_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+  NOTIFICATION_MAX_ROWS: z.coerce.number().int().min(100).max(1_000_000).default(25000),
+  ENABLE_HEARTBEAT_SOURCE: z
+    .enum(['0', '1', 'true', 'false'])
+    .default('0')
+    .transform((value) => value === '1' || value === 'true'),
+  ENABLE_NOTIFICATION_WEBHOOK: z
+    .enum(['0', '1', 'true', 'false'])
+    .default('1')
+    .transform((value) => value === '1' || value === 'true'),
+  NOTIFICATION_WEBHOOK_HOST: z.string().min(1).default('0.0.0.0'),
+  NOTIFICATION_WEBHOOK_PORT: z.coerce.number().int().min(1).max(65535).default(8787),
+  NOTIFICATION_WEBHOOK_PATH: z
+    .string()
+    .min(1)
+    .default('/notifications/webhook')
+    .transform((value) => (value.startsWith('/') ? value : `/${value}`)),
+  NOTIFICATION_WEBHOOK_SECRET: z.string().default(''),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -78,6 +115,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       `CODEX_MODEL (${parsed.CODEX_MODEL}) must start with CODEX_MODEL_PREFIX (${parsed.CODEX_MODEL_PREFIX})`,
     );
   }
+  if (parsed.ENABLE_NOTIFICATION_WEBHOOK && parsed.NOTIFICATION_WEBHOOK_SECRET.trim().length === 0) {
+    throw new Error('NOTIFICATION_WEBHOOK_SECRET is required when ENABLE_NOTIFICATION_WEBHOOK is enabled');
+  }
 
   return {
     sendblue: {
@@ -94,6 +134,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       discardBacklogOnStart: parsed.DISCARD_BACKLOG_ON_START,
       inboundMediaMode: parsed.INBOUND_MEDIA_MODE,
       typingHeartbeatMs: parsed.TYPING_HEARTBEAT_MS,
+    },
+    notifications: {
+      enabled: parsed.ENABLE_NOTIFICATION_TURNS,
+      rawExcerptBytes: parsed.NOTIFICATION_RAW_EXCERPT_BYTES,
+      retentionDays: parsed.NOTIFICATION_RETENTION_DAYS,
+      maxRows: parsed.NOTIFICATION_MAX_ROWS,
+      heartbeatSourceEnabled: parsed.ENABLE_HEARTBEAT_SOURCE,
+      webhook: {
+        enabled: parsed.ENABLE_NOTIFICATION_WEBHOOK,
+        host: parsed.NOTIFICATION_WEBHOOK_HOST,
+        port: parsed.NOTIFICATION_WEBHOOK_PORT,
+        path: parsed.NOTIFICATION_WEBHOOK_PATH,
+        secret: parsed.NOTIFICATION_WEBHOOK_SECRET.trim(),
+      },
     },
     trustedPhoneNumber,
     codex: {

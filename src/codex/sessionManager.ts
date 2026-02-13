@@ -1,8 +1,10 @@
 import { EventEmitter } from 'node:events';
 import { z } from 'zod';
+import type { NotificationRecord, NotificationSource, NotificationStatus } from '../notifications/types.js';
 import { logWarn } from '../logger.js';
 import { StateStore } from '../state/store.js';
 import type { BridgeFlags, JsonRpcId } from '../types.js';
+import { nowMs } from '../utils.js';
 import { CodexRpcClient, type RpcNotificationEvent, type RpcServerRequestEvent } from './rpcClient.js';
 
 const turnStartedSchema = z.object({
@@ -59,6 +61,30 @@ const threadStartResponseSchema = z.object({
 
 const threadResumeResponseSchema = z.object({
   thread: z.object({ id: z.string() }),
+});
+
+const dynamicToolCallSchema = z.object({
+  threadId: z.string(),
+  turnId: z.string(),
+  callId: z.string(),
+  tool: z.string(),
+  arguments: z.record(z.string(), z.unknown()).default({}),
+});
+
+const notificationListArgsSchema = z.object({
+  count: z.number().int().min(1).max(200).optional(),
+  source: z.enum(['all', 'webhook', 'cron', 'heartbeat']).optional(),
+});
+
+const notificationGetArgsSchema = z.object({
+  id: z.string().min(1),
+});
+
+const notificationSearchArgsSchema = z.object({
+  source: z.enum(['all', 'webhook', 'cron', 'heartbeat']).optional(),
+  status: z.enum(['received', 'queued', 'processing', 'sent', 'suppressed', 'failed', 'duplicate']).optional(),
+  sinceHours: z.number().int().min(1).max(24 * 365).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
 });
 
 interface SessionManagerOptions {
@@ -174,6 +200,7 @@ export class CodexSessionManager extends EventEmitter {
       approvalPolicy,
       sandbox: 'danger-full-access' as const,
       experimentalRawEvents: false,
+      dynamicTools: notificationDynamicTools,
     };
 
     let raw: unknown;
@@ -336,6 +363,74 @@ export class CodexSessionManager extends EventEmitter {
       kind: 'turn_started',
       summary: 'turn started',
       payload: { input: text },
+    });
+
+    return {
+      mode: 'start',
+      turnId,
+      threadId,
+    };
+  }
+
+  async startNotificationTurn(args: {
+    text: string;
+    flags: BridgeFlags;
+    outputSchema: unknown;
+  }): Promise<TurnStartResult> {
+    const session = this.store.getSession(this.trustedPhoneNumber);
+    let threadId = await this.ensureThread(args.flags);
+
+    let startRaw: unknown;
+    try {
+      startRaw = await this.rpc.request<unknown>('turn/start', {
+        threadId,
+        input: [asTextInput(args.text)],
+        model: session.model,
+        approvalPolicy: args.flags.autoApprove ? 'never' : 'on-request',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+        cwd: this.cwd,
+        outputSchema: args.outputSchema,
+      });
+    } catch (error) {
+      if (!isThreadNotFound(error)) {
+        throw error;
+      }
+
+      this.store.appendAudit({
+        phoneNumber: this.trustedPhoneNumber,
+        threadId,
+        kind: 'error',
+        summary: 'thread not found on notification turn/start; attempting resume',
+        payload: String(error),
+      });
+
+      this.attachedThreadId = null;
+      threadId = await this.ensureThread(args.flags);
+      startRaw = await this.rpc.request<unknown>('turn/start', {
+        threadId,
+        input: [asTextInput(args.text)],
+        model: session.model,
+        approvalPolicy: args.flags.autoApprove ? 'never' : 'on-request',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+        cwd: this.cwd,
+        outputSchema: args.outputSchema,
+      });
+    }
+
+    const startParsed = turnStartResponseSchema.safeParse(startRaw);
+    if (!startParsed.success) {
+      throw new Error(`Invalid notification turn/start response: ${startParsed.error.message}`);
+    }
+
+    const turnId = startParsed.data.turn.id;
+    this.store.setActiveTurn(this.trustedPhoneNumber, turnId);
+    this.store.appendAudit({
+      phoneNumber: this.trustedPhoneNumber,
+      threadId,
+      turnId,
+      kind: 'turn_started',
+      summary: 'notification turn started',
+      payload: { input: args.text },
     });
 
     return {
@@ -603,6 +698,11 @@ export class CodexSessionManager extends EventEmitter {
   }
 
   private async handleServerRequest(event: RpcServerRequestEvent): Promise<void> {
+    if (event.method === 'item/tool/call') {
+      await this.handleDynamicToolCall(event);
+      return;
+    }
+
     if (event.method !== 'item/commandExecution/requestApproval' && event.method !== 'item/fileChange/requestApproval') {
       await this.rpc.respondError(event.id, -32601, `Unsupported method: ${event.method}`);
       return;
@@ -629,6 +729,65 @@ export class CodexSessionManager extends EventEmitter {
     if (!flags.autoApprove || flags.paused) {
       this.emit('approvalDeclinedDueToPolicy', {
         method: event.method,
+      });
+    }
+  }
+
+  private async handleDynamicToolCall(event: RpcServerRequestEvent): Promise<void> {
+    const parsed = dynamicToolCallSchema.safeParse(event.params);
+    if (!parsed.success) {
+      await this.rpc.respondError(event.id, -32602, `Invalid item/tool/call params: ${parsed.error.message}`);
+      return;
+    }
+
+    try {
+      let payload: unknown;
+      switch (parsed.data.tool) {
+        case 'notifications_list': {
+          const args = notificationListArgsSchema.parse(parsed.data.arguments);
+          const notifications = this.store.listNotifications({
+            count: args.count ?? 20,
+            source: (args.source as NotificationSource | undefined) ?? 'all',
+          });
+          payload = {
+            notifications: notifications.map((row) => compactNotification(row)),
+          };
+          break;
+        }
+        case 'notifications_get': {
+          const args = notificationGetArgsSchema.parse(parsed.data.arguments);
+          const notification = this.store.getNotificationById(args.id);
+          payload = {
+            notification: notification ? fullNotification(notification) : null,
+          };
+          break;
+        }
+        case 'notifications_search': {
+          const args = notificationSearchArgsSchema.parse(parsed.data.arguments);
+          const sinceMs = args.sinceHours ? nowMs() - args.sinceHours * 60 * 60 * 1000 : undefined;
+          const notifications = this.store.queryNotifications({
+            source: (args.source as NotificationSource | undefined) ?? 'all',
+            status: args.status as NotificationStatus | undefined,
+            sinceMs,
+            limit: args.limit ?? 20,
+          });
+          payload = {
+            notifications: notifications.map((row) => compactNotification(row)),
+          };
+          break;
+        }
+        default:
+          throw new Error(`Unknown dynamic tool: ${parsed.data.tool}`);
+      }
+
+      await this.rpc.respond(event.id, {
+        success: true,
+        contentItems: [{ type: 'inputText', text: JSON.stringify(payload, null, 2) }],
+      });
+    } catch (error) {
+      await this.rpc.respond(event.id, {
+        success: false,
+        contentItems: [{ type: 'inputText', text: `tool call failed: ${getErrorMessage(error)}` }],
       });
     }
   }
@@ -675,3 +834,84 @@ function isThreadStartTimeout(error: unknown): boolean {
   }
   return message.includes('RPC request timed out: thread/start');
 }
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function compactNotification(row: NotificationRecord): Record<string, unknown> {
+  return {
+    id: row.id,
+    source: row.source,
+    status: row.status,
+    receivedAt: new Date(row.receivedAtMs).toISOString(),
+    summary: row.summary,
+    duplicateCount: row.duplicateCount,
+    delivery: row.delivery,
+    reasonCode: row.reasonCode,
+    message: row.messageExcerpt,
+    error: row.errorText,
+  };
+}
+
+function fullNotification(row: NotificationRecord): Record<string, unknown> {
+  return {
+    ...compactNotification(row),
+    sourceAccount: row.sourceAccount,
+    sourceEventId: row.sourceEventId,
+    dedupeKey: row.dedupeKey,
+    payloadHash: row.payloadHash,
+    rawExcerpt: row.rawExcerpt,
+    rawSizeBytes: row.rawSizeBytes,
+    rawTruncated: row.rawTruncated,
+    firstSeenAt: new Date(row.firstSeenAtMs).toISOString(),
+    lastSeenAt: new Date(row.lastSeenAtMs).toISOString(),
+    threadId: row.threadId,
+    turnId: row.turnId,
+    decision: row.decision,
+  };
+}
+
+const notificationDynamicTools = [
+  {
+    name: 'notifications_list',
+    description: 'List recent notifications from bridge-local notification history.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        count: { type: 'integer', minimum: 1, maximum: 200 },
+        source: { type: 'string', enum: ['all', 'webhook', 'cron', 'heartbeat'] },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'notifications_get',
+    description: 'Get one notification by id from bridge-local notification history.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'notifications_search',
+    description: 'Search bridge-local notifications by source/status/time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', enum: ['all', 'webhook', 'cron', 'heartbeat'] },
+        status: { type: 'string', enum: ['received', 'queued', 'processing', 'sent', 'suppressed', 'failed', 'duplicate'] },
+        sinceHours: { type: 'integer', minimum: 1, maximum: 8760 },
+        limit: { type: 'integer', minimum: 1, maximum: 200 },
+      },
+      additionalProperties: false,
+    },
+  },
+] as const;

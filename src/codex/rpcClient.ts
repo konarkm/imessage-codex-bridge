@@ -95,7 +95,9 @@ export class CodexRpcClient extends EventEmitter {
         title: this.opts.clientTitle,
         version: this.opts.clientVersion,
       },
-      capabilities: null,
+      capabilities: {
+        experimentalApi: true,
+      },
     });
 
     await this.notify('initialized', {});
