@@ -9,21 +9,21 @@ export const notificationDecisionOutputSchema = {
       enum: ['send', 'suppress'],
     },
     message: {
-      type: 'string',
+      type: ['string', 'null'],
     },
     reasonCode: {
-      type: 'string',
+      type: ['string', 'null'],
     },
   },
-  required: ['delivery'],
+  required: ['delivery', 'message', 'reasonCode'],
   additionalProperties: false,
 } as const;
 
 const notificationDecisionSchema = z
   .object({
     delivery: z.enum(['send', 'suppress']),
-    message: z.string().optional(),
-    reasonCode: z.string().optional(),
+    message: z.string().nullable().optional(),
+    reasonCode: z.string().nullable().optional(),
   })
   .strict();
 
@@ -34,7 +34,11 @@ export function parseNotificationDecision(raw: string): NotificationDecision | n
     if (!result.success) {
       return null;
     }
-    return result.data;
+    return {
+      delivery: result.data.delivery,
+      message: result.data.message ?? undefined,
+      reasonCode: result.data.reasonCode ?? undefined,
+    };
   } catch {
     return null;
   }
