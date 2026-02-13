@@ -42,6 +42,7 @@ export class CodexRpcClient extends EventEmitter {
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
   private stdoutBuffer = '';
   private started = false;
+  private childGeneration = 0;
 
   constructor(opts: CodexRpcClientOptions) {
     super();
@@ -53,20 +54,29 @@ export class CodexRpcClient extends EventEmitter {
       return;
     }
 
-    this.child = spawn(this.opts.codexBin, ['app-server'], {
+    const child = spawn(this.opts.codexBin, ['app-server'], {
       cwd: this.opts.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
     });
+    const generation = ++this.childGeneration;
+    this.child = child;
+    this.stdoutBuffer = '';
 
-    this.child.stdout.setEncoding('utf8');
-    this.child.stderr.setEncoding('utf8');
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
 
-    this.child.stdout.on('data', (chunk: string) => {
+    child.stdout.on('data', (chunk: string) => {
+      if (!this.isCurrentChild(child, generation)) {
+        return;
+      }
       this.handleStdout(chunk);
     });
 
-    this.child.stderr.on('data', (chunk: string) => {
+    child.stderr.on('data', (chunk: string) => {
+      if (!this.isCurrentChild(child, generation)) {
+        return;
+      }
       this.emit('stderr', chunk);
       const lines = chunk.split(/\r?\n/).filter((line) => line.trim().length > 0);
       for (const line of lines) {
@@ -74,14 +84,22 @@ export class CodexRpcClient extends EventEmitter {
       }
     });
 
-    this.child.on('exit', (code, signal) => {
+    child.on('exit', (code, signal) => {
+      if (!this.isCurrentChild(child, generation)) {
+        return;
+      }
       this.started = false;
+      this.child = null;
       this.rejectPending(new Error(`codex app-server exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`));
       this.emit('exit', { code, signal });
     });
 
-    this.child.on('error', (error) => {
+    child.on('error', (error) => {
+      if (!this.isCurrentChild(child, generation)) {
+        return;
+      }
       this.started = false;
+      this.child = null;
       this.rejectPending(error);
       this.emit('error', error);
     });
@@ -112,6 +130,7 @@ export class CodexRpcClient extends EventEmitter {
 
     const child = this.child;
     this.child = null;
+    this.rejectPending(new Error('codex app-server stopped'));
 
     try {
       child.kill('SIGTERM');
@@ -291,5 +310,9 @@ export class CodexRpcClient extends EventEmitter {
       pending.reject(error);
       this.pending.delete(id);
     }
+  }
+
+  private isCurrentChild(child: ChildProcessWithoutNullStreams, generation: number): boolean {
+    return this.child === child && this.childGeneration === generation;
   }
 }

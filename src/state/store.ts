@@ -48,6 +48,11 @@ interface NotificationRow {
   error_text: string | null;
 }
 
+export interface PendingBridgeRestartNotice {
+  target: 'bridge' | 'both';
+  requestedAtMs: number;
+}
+
 export class StateStore {
   private static readonly SCHEMA_VERSION = 2;
 
@@ -250,6 +255,27 @@ export class StateStore {
 
   setAutoApprove(value: boolean): void {
     this.setFlag('auto_approve', value ? '1' : '0');
+  }
+
+  setPendingBridgeRestartNotice(target: PendingBridgeRestartNotice['target']): void {
+    const payload: PendingBridgeRestartNotice = {
+      target,
+      requestedAtMs: nowMs(),
+    };
+    this.setFlag('pending_bridge_restart_notice', JSON.stringify(payload));
+  }
+
+  consumePendingBridgeRestartNotice(): PendingBridgeRestartNotice | null {
+    const row = this.db
+      .prepare('SELECT value FROM flags WHERE key = ?')
+      .get('pending_bridge_restart_notice') as { value: string } | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    this.db.prepare('DELETE FROM flags WHERE key = ?').run('pending_bridge_restart_notice');
+    return parsePendingBridgeRestartNotice(row.value);
   }
 
   private getFlag(key: string, defaultValue: string): string {
@@ -540,6 +566,26 @@ export class StateStore {
 
     return pruned;
   }
+}
+
+function parsePendingBridgeRestartNotice(raw: string): PendingBridgeRestartNotice | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<PendingBridgeRestartNotice>;
+    if (
+      parsed &&
+      (parsed.target === 'bridge' || parsed.target === 'both') &&
+      typeof parsed.requestedAtMs === 'number' &&
+      Number.isFinite(parsed.requestedAtMs)
+    ) {
+      return {
+        target: parsed.target,
+        requestedAtMs: parsed.requestedAtMs,
+      };
+    }
+  } catch {
+    // ignore malformed payloads
+  }
+  return null;
 }
 
 function parseNotificationRow(row: NotificationRow): NotificationRecord {

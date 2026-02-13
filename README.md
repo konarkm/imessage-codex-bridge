@@ -166,8 +166,9 @@ npm run build
 - v1 is single-trusted-user only.
 - Notification decisions use per-turn `outputSchema` (`send` vs `suppress`) and are audited in SQLite.
 - Restart controls:
-  - `/restart codex` restarts only the Codex app-server child.
-  - `/restart bridge` and `/restart both` trigger a full bridge restart (requires launching via `./scripts/run-dev.sh` for auto-relaunch).
+  - `/restart codex` sends an immediate "restarting" ack, restarts only the Codex app-server child, then sends a "back online" confirmation.
+  - `/restart bridge` sends an immediate "restarting" ack, triggers a full bridge restart, then sends a "back online" confirmation after process relaunch.
+  - `/restart both` does the same as bridge restart and confirms both are back online after relaunch.
 - Assistant/tool internals are not pushed by default; use `/debug` for timeline.
 - Requires a Codex app-server build that supports `turn/steer` (latest `origin/main` or `0.99+` once released).
 - Read receipts are best-effort: the Sendblue `mark-read` call can return success while iMessage UI still shows `Delivered`.

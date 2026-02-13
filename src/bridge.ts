@@ -123,6 +123,7 @@ export class BridgeService {
     }
 
     logInfo('Bridge service started');
+    await this.maybeSendRestartOnlineAnnouncement();
 
     while (this.running) {
       try {
@@ -838,6 +839,7 @@ export class BridgeService {
     }
 
     if (target === 'codex') {
+      await this.enqueueOutbound('Restarting codex now...');
       const flags = this.deps.store.getFlags();
       const { threadId } = await this.deps.sessions.restartCodex(flags);
       this.clearTurnTracking();
@@ -847,18 +849,24 @@ export class BridgeService {
         summary: 'restart command handled: codex',
         payload: { threadId },
       });
-      return `Codex restarted.\nThread: ${threadId ?? '(none)'}`;
+      return `Codex restarted and back online.\nThread: ${threadId ?? '(none)'}`;
     }
 
-    if (target === 'bridge' || target === 'both') {
-      this.requestBridgeRestart(target);
+    if (target === 'bridge') {
+      this.requestBridgeRestart('bridge');
       return 'Restarting bridge now...';
+    }
+
+    if (target === 'both') {
+      this.requestBridgeRestart('both');
+      return 'Restarting bridge and codex now...';
     }
 
     return 'Usage: /restart <codex|bridge|both>';
   }
 
   private requestBridgeRestart(target: 'bridge' | 'both'): void {
+    this.deps.store.setPendingBridgeRestartNotice(target);
     this.restartRequested = true;
     this.running = false;
     this.clearTurnTracking();
@@ -868,6 +876,17 @@ export class BridgeService {
       summary: `restart command handled: ${target}`,
       payload: { exitCode: 42 },
     });
+  }
+
+  private async maybeSendRestartOnlineAnnouncement(): Promise<void> {
+    const pending = this.deps.store.consumePendingBridgeRestartNotice();
+    if (!pending) {
+      return;
+    }
+
+    const message =
+      pending.target === 'both' ? 'Bridge and codex restarted. Back online.' : 'Bridge restarted. Back online.';
+    await this.enqueueOutbound(message);
   }
 
   private clearTurnTracking(): void {

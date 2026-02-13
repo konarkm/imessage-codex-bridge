@@ -40,6 +40,17 @@ describe('StateStore', () => {
     expect(changed.paused).toBe(true);
     expect(changed.autoApprove).toBe(false);
 
+    expect(store.consumePendingBridgeRestartNotice()).toBeNull();
+    store.setPendingBridgeRestartNotice('bridge');
+    const pendingBridge = store.consumePendingBridgeRestartNotice();
+    expect(pendingBridge?.target).toBe('bridge');
+    expect(typeof pendingBridge?.requestedAtMs).toBe('number');
+    expect(store.consumePendingBridgeRestartNotice()).toBeNull();
+
+    store.setPendingBridgeRestartNotice('both');
+    const pendingBoth = store.consumePendingBridgeRestartNotice();
+    expect(pendingBoth?.target).toBe('both');
+
     store.close();
     rmSync(dbPath, { force: true });
   });

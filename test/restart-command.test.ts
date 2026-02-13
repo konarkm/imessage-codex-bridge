@@ -7,6 +7,12 @@ function createBridgeForRestartTests(): {
     sessions: {
       restartCodex: ReturnType<typeof vi.fn>;
     };
+    sendblue: {
+      sendMessage: ReturnType<typeof vi.fn>;
+    };
+    store: {
+      consumePendingBridgeRestartNotice: ReturnType<typeof vi.fn>;
+    };
   };
 } {
   const deps = {
@@ -27,6 +33,8 @@ function createBridgeForRestartTests(): {
       setAutoApprove: vi.fn(() => undefined),
       getLastTurnTimeline: vi.fn(() => []),
       listNotifications: vi.fn(() => []),
+      setPendingBridgeRestartNotice: vi.fn(() => undefined),
+      consumePendingBridgeRestartNotice: vi.fn(() => null),
     },
     sessions: {
       start: vi.fn(async () => undefined),
@@ -69,6 +77,12 @@ function createBridgeForRestartTests(): {
       sessions: {
         restartCodex: deps.sessions.restartCodex,
       },
+      sendblue: {
+        sendMessage: deps.sendblue.sendMessage,
+      },
+      store: {
+        consumePendingBridgeRestartNotice: deps.store.consumePendingBridgeRestartNotice,
+      },
     },
   };
 }
@@ -83,7 +97,8 @@ describe('/restart command behavior', () => {
     const response = await invoke.executeCommand('restart', ['codex']);
 
     expect(deps.sessions.restartCodex).toHaveBeenCalledTimes(1);
-    expect(response).toContain('Codex restarted.');
+    expect(deps.sendblue.sendMessage).toHaveBeenCalledTimes(1);
+    expect(response).toContain('Codex restarted and back online.');
     expect(bridge.consumeRestartRequested()).toBe(false);
   });
 
@@ -106,7 +121,8 @@ describe('/restart command behavior', () => {
       executeCommand: (name: string, args: string[]) => Promise<string>;
     };
 
-    await invoke.executeCommand('restart', ['both']);
+    const response = await invoke.executeCommand('restart', ['both']);
+    expect(response).toContain('Restarting bridge and codex now...');
     expect(bridge.consumeRestartRequested()).toBe(true);
   });
 
@@ -118,5 +134,22 @@ describe('/restart command behavior', () => {
 
     expect(await invoke.executeCommand('restart', [])).toBe('Usage: /restart <codex|bridge|both>');
     expect(await invoke.executeCommand('restart', ['nope'])).toBe('Usage: /restart <codex|bridge|both>');
+  });
+
+  it('announces bridge online when pending restart marker exists', async () => {
+    const { bridge, deps } = createBridgeForRestartTests();
+    deps.store.consumePendingBridgeRestartNotice.mockReturnValueOnce({
+      target: 'bridge',
+      requestedAtMs: Date.now(),
+    });
+
+    const invoke = bridge as unknown as {
+      maybeSendRestartOnlineAnnouncement: () => Promise<void>;
+    };
+
+    await invoke.maybeSendRestartOnlineAnnouncement();
+
+    expect(deps.sendblue.sendMessage).toHaveBeenCalledTimes(1);
+    expect(deps.sendblue.sendMessage.mock.calls[0]?.[1]).toContain('Bridge restarted. Back online.');
   });
 });
