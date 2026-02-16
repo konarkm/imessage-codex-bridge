@@ -93,7 +93,7 @@ const envSchema = z.object({
   NOTIFICATION_WEBHOOK_PATH: z
     .string()
     .min(1)
-    .default('/notifications/webhook')
+    .default('/events')
     .transform((value) => (value.startsWith('/') ? value : `/${value}`)),
   NOTIFICATION_WEBHOOK_SECRET: z.string().default(''),
 });

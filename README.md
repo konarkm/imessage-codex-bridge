@@ -84,13 +84,13 @@ Notification webhook setup:
 ENABLE_NOTIFICATION_WEBHOOK=1
 NOTIFICATION_WEBHOOK_SECRET=<long-random-secret>
 NOTIFICATION_WEBHOOK_PORT=8787
-NOTIFICATION_WEBHOOK_PATH=/notifications/webhook
+NOTIFICATION_WEBHOOK_PATH=/events
 ```
 
 Send webhook requests to:
 
 ```bash
-POST http://<bridge-host>:8787/notifications/webhook
+POST http://<bridge-host>:8787/events
 Authorization: Bearer <NOTIFICATION_WEBHOOK_SECRET>
 Content-Type: application/json
 ```
