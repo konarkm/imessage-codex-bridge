@@ -270,10 +270,6 @@ export class BridgeService {
       return;
     }
 
-    if (this.deps.store.hasProcessedMessages()) {
-      return;
-    }
-
     const messages = await this.deps.sendblue.getInboundMessages(100);
     const handles = messages
       .filter((message) => normalizePhone(message.from_number) === this.deps.trustedPhoneNumber)

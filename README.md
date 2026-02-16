@@ -76,7 +76,7 @@ Backlog behavior (recommended default):
 DISCARD_BACKLOG_ON_START=1
 ```
 
-On a brand-new local state DB, this marks current inbound history as seen at startup so only new incoming messages are processed.
+When enabled, each startup marks currently visible inbound history as seen so only messages that arrive after startup are processed.
 
 Notification webhook setup:
 
@@ -161,7 +161,7 @@ npm run build
 - Requires Codex CLI `>=0.101.0`.
 - Read receipts are best-effort: the Sendblue `mark-read` call can return success while iMessage UI still shows `Delivered`.
 - Outbound formatting defaults to `ENABLE_OUTBOUND_UNICODE_FORMATTING=1` and converts markdown markers like `**bold**`, `*italic*`, and `` `code` ``.
-- Fresh-install safety defaults to `DISCARD_BACKLOG_ON_START=1` so historic inbound messages are not replayed into Codex on first run.
+- Startup safety defaults to `DISCARD_BACKLOG_ON_START=1` so inbound messages that predate startup are not replayed into Codex.
 - Notification retention defaults: 90 days plus 25,000-row cap.
 
 ## TODO
