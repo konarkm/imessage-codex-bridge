@@ -112,8 +112,6 @@ Auth behavior:
 - if bridge exits with code `42` (from `/restart bridge` or `/restart both`), it relaunches automatically.
 - for other non-zero exits, it stops so crash loops remain visible.
 
-`./scripts/run-dev.sh` is kept as a compatibility alias and forwards to `./scripts/run.sh`.
-
 7. Optional detached mode via tmux:
 
 ```bash
