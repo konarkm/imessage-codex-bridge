@@ -5,11 +5,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-if [ -f .env ]; then
-  set -a
-  source .env
-  set +a
-fi
+load_env() {
+  if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+  fi
+}
+
+load_env
 
 CODEX_BIN_CMD="${CODEX_BIN:-codex}"
 MIN_CODEX_VERSION="0.101.0"
@@ -35,6 +39,8 @@ fi
 RESTART_EXIT_CODE=42
 
 while true; do
+  load_env
+
   set +e
   npm run dev
   exit_code=$?

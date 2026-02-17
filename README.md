@@ -95,6 +95,10 @@ Authorization: Bearer <NOTIFICATION_WEBHOOK_SECRET>
 Content-Type: application/json
 ```
 
+Auth behavior:
+
+- `Authorization: Bearer <NOTIFICATION_WEBHOOK_SECRET>` or `X-Bridge-Secret`.
+
 5. Start the bridge:
 
 ```bash

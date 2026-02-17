@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { authorizeWebhook } from './auth.js';
 import { logError, logInfo, logWarn } from '../logger.js';
 
 interface NotificationWebhookServerOptions {
@@ -77,14 +78,26 @@ export class NotificationWebhookServer {
       return;
     }
 
-    if (!this.isAuthorized(req)) {
+    let body: string;
+    try {
+      body = await this.readBody(req);
+    } catch (error) {
+      this.respondJson(res, 400, { ok: false, error: getErrorMessage(error) });
+      return;
+    }
+
+    const auth = authorizeWebhook({
+      headers: req.headers,
+      fallbackSecret: this.opts.secret,
+    });
+    if (!auth.authorized) {
+      logWarn(`Notification webhook unauthorized (${auth.reasonCode}) from ${req.socket.remoteAddress ?? 'unknown'}`);
       this.respondJson(res, 401, { ok: false, error: 'Unauthorized' });
       return;
     }
 
     let payload: unknown;
     try {
-      const body = await this.readBody(req);
       payload = JSON.parse(body);
     } catch (error) {
       this.respondJson(res, 400, { ok: false, error: getErrorMessage(error) });
@@ -108,21 +121,6 @@ export class NotificationWebhookServer {
       logError('Notification webhook handler failed', error);
       this.respondJson(res, 500, { ok: false, error: 'Internal error' });
     }
-  }
-
-  private isAuthorized(req: IncomingMessage): boolean {
-    const authHeader = this.headerValue(req, 'authorization');
-    if (authHeader) {
-      const token = authHeader.replace(/^bearer\s+/i, '').trim();
-      if (token.length > 0) {
-        return token === this.opts.secret;
-      }
-    }
-    const secretHeader = this.headerValue(req, 'x-bridge-secret');
-    if (secretHeader) {
-      return secretHeader === this.opts.secret;
-    }
-    return false;
   }
 
   private async readBody(req: IncomingMessage): Promise<string> {
