@@ -26,7 +26,7 @@ async function main(): Promise<void> {
     cwd: config.codex.cwd,
     clientName: 'imessage_codex_bridge',
     clientTitle: 'iMessage Codex Bridge',
-    clientVersion: '0.1.0',
+    clientVersion: '0.2.0',
   });
 
   const sessions = new CodexSessionManager({

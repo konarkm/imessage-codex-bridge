@@ -5,6 +5,51 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
+LOCK_DIR="$REPO_ROOT/.bridge-run.lock"
+LOCK_PID_FILE="$LOCK_DIR/pid"
+
+release_run_lock() {
+  local lock_pid
+  lock_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null || true)"
+  if [ "$lock_pid" = "$$" ]; then
+    rm -rf "$LOCK_DIR" || true
+  fi
+}
+
+acquire_run_lock() {
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" > "$LOCK_PID_FILE"
+    trap release_run_lock EXIT
+    return
+  fi
+
+  if [ ! -f "$LOCK_PID_FILE" ]; then
+    echo "bridge appears to already be running (lock dir exists: $LOCK_DIR)"
+    echo "if no bridge is running, remove the lock dir and retry"
+    exit 1
+  fi
+
+  local existing_pid
+  existing_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null || true)"
+  if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+    echo "bridge is already running (pid $existing_pid)"
+    echo "stop the existing process before starting another"
+    exit 1
+  fi
+
+  rm -rf "$LOCK_DIR"
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" > "$LOCK_PID_FILE"
+    trap release_run_lock EXIT
+    return
+  fi
+
+  echo "failed to acquire bridge run lock: $LOCK_DIR"
+  exit 1
+}
+
+acquire_run_lock
+
 load_env() {
   if [ -f .env ]; then
     set -a

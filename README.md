@@ -13,6 +13,12 @@ iMessage-first bridge for Codex via Sendblue.
 - Supports interrupt/reset/debug/control commands.
 - Keeps structured local audit logs in SQLite.
 
+## Why this is useful
+
+- iMessage-native control surface for Codex without changing your daily messaging workflow.
+- Local-first runtime (Mac terminal process + local Codex app-server).
+- Auditable message/notification history with explicit operational controls.
+
 ## Architecture
 
 - Runtime: local Mac terminal process
@@ -111,6 +117,7 @@ Auth behavior:
 
 - if bridge exits with code `42` (from `/restart bridge` or `/restart both`), it relaunches automatically.
 - for other non-zero exits, it stops so crash loops remain visible.
+- it enforces a single-instance lock (`.bridge-run.lock`) to prevent duplicate bridge processes.
 
 7. Optional detached mode via tmux:
 
@@ -123,6 +130,7 @@ tmux new -s imessage-bridge 'cd /absolute/path/to/imessage-codex-bridge && ./scr
 ## Run notes
 
 - Run exactly one bridge process at a time.
+- If the script reports a stale lock after an unclean exit, delete `.bridge-run.lock` and start again.
 - If you run it in tmux:
 
 ```bash
@@ -168,5 +176,4 @@ npm run build
 
 ## TODO
 
-- Add a single-instance process lock (PID/lockfile) so only one bridge process can run at a time.
 - Add `/health` or `/diag` command with runtime diagnostics (thread, active turn, model, feature flags, recent inbound/outbound timestamps).
