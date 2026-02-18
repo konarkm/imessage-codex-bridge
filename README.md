@@ -2,6 +2,14 @@
 
 iMessage-first bridge for Codex via Sendblue.
 
+## Demo
+
+Quick preview (tap/click to open full video):
+
+[![iMessage Codex Bridge demo](docs/media/imessage-demo.gif)](https://youtube.com/shorts/Pp9IAUcCs3s)
+
+Full demo video: https://youtube.com/shorts/Pp9IAUcCs3s
+
 ## What this does
 
 - Polls Sendblue for inbound iMessages from one trusted number.
@@ -22,9 +30,10 @@ iMessage-first bridge for Codex via Sendblue.
 ## Architecture
 
 - Runtime: local Mac terminal process
-- Transport to Codex: local stdio JSON-RPC (`codex app-server --listen stdio://`)
+- Codex execution: bridge starts and manages a local Codex app-server process.
+- Transport to Codex: local stdio JSON-RPC to app-server (`codex app-server --listen stdio://`)
 - Transport to iMessage: Sendblue API polling + send message API
-- Safety mode default: danger-full-access (per v1 decision)
+- Safety mode default: danger-full-access. Use with caution.
 
 ## Commands
 
@@ -50,7 +59,7 @@ iMessage-first bridge for Codex via Sendblue.
 
 - Node.js `>=24`
 - Sendblue account with one sending number and one trusted inbound number
-- Codex CLI `>=0.101.0` (must include app-server `turn/start` + `turn/steer`)
+- Codex CLI `>=0.101.0`
 
 2. Verify Codex CLI:
 
@@ -84,7 +93,7 @@ DISCARD_BACKLOG_ON_START=1
 
 When enabled, each startup marks currently visible inbound history as seen so only messages that arrive after startup are processed.
 
-Notification webhook setup:
+Optional: Notification webhook setup (for webhook-driven notifications):
 
 ```bash
 ENABLE_NOTIFICATION_WEBHOOK=1
@@ -104,6 +113,12 @@ Content-Type: application/json
 Auth behavior:
 
 - `Authorization: Bearer <NOTIFICATION_WEBHOOK_SECRET>` or `X-Bridge-Secret`.
+
+If you do not need webhook ingress, set:
+
+```bash
+ENABLE_NOTIFICATION_WEBHOOK=0
+```
 
 5. Start the bridge:
 
